@@ -1,0 +1,8 @@
+# Environment and secrets
+.env
+
+# Logs and uploads
+public/storage/logs/*.log
+public/storage/uploads/*
+!public/storage/uploads/.gitkeep
+!public/storage/logs/.gitkeep

@@ -1,0 +1,16 @@
+-- Items table: recycler listings (run once)
+CREATE TABLE IF NOT EXISTS `items` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `recycler_user_id` INT NOT NULL,
+  `category` VARCHAR(64) NOT NULL,
+  `title` VARCHAR(255) NOT NULL,
+  `description` TEXT NULL,
+  `condition_notes` TEXT NULL,
+  `photos_json` TEXT NULL,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'draft',
+  `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  INDEX `idx_recycler_user_id` (`recycler_user_id`),
+  CONSTRAINT `fk_items_user` FOREIGN KEY (`recycler_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+);
