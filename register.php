@@ -6,11 +6,15 @@
  */
 session_start();
 require_once __DIR__ . '/app/config/db.php';
+require_once __DIR__ . '/app/config/csrf.php';
+require_once __DIR__ . '/mailer.php';
+require_once __DIR__ . '/app/config/tokens.php';
 
 $error = '';
 $success = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_valid_csrf();
     $name = trim($_POST['name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
@@ -36,14 +40,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $pdo->prepare("INSERT INTO users (name, email, password, role, created_at) VALUES (?, ?, ?, 'user', NOW())");
             $stmt->execute([$name, $email, $password_hash]);
             $userId = (int) $pdo->lastInsertId();
-            session_regenerate_id(true);
-            $_SESSION['user'] = [
-                'id'    => $userId,
-                'name'  => $name,
-                'email' => $email,
-                'role'  => 'user',
-            ];
-            header('Location: dashboard.php');
+
+            // Create email verification token (24h expiry)
+            $token = generate_token(16);
+            $expiresAt = date('Y-m-d H:i:s', time() + 60 * 60 * 24);
+            $stmt = $pdo->prepare("INSERT INTO email_verifications (user_id, token, expires_at) VALUES (?, ?, ?)");
+            $stmt->execute([$userId, $token, $expiresAt]);
+
+            // Send verification email
+            $verifyLink = APP_URL . '/verify_email.php?token=' . urlencode($token);
+            $subject = 'Verify your email — RePlug';
+            $html = '<p>Hi ' . htmlspecialchars($name) . ',</p>'
+                  . '<p>Thanks for registering with RePlug. Please verify your email by clicking the button below:</p>'
+                  . '<p><a href="' . htmlspecialchars($verifyLink) . '" style="display:inline-block;padding:10px 18px;border-radius:6px;background:#1E88E5;color:#fff;text-decoration:none;">Verify email</a></p>'
+                  . '<p>Or open this link: ' . htmlspecialchars($verifyLink) . '</p>';
+            replug_send_mail($email, $name, $subject, $html);
+
+            // Do NOT log the user in yet; require email verification first.
+            header('Location: login.php?registered=1');
             exit;
         }
     }
@@ -247,6 +261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <p class="error-msg"><?php echo htmlspecialchars($error); ?></p>
             <?php endif; ?>
             <form method="post" action="register.php">
+                <?php echo csrf_field(); ?>
                 <div class="form-group">
                     <label for="name">Full name</label>
                     <input type="text" id="name" name="name" placeholder="Your name" required autocomplete="name" value="<?php echo htmlspecialchars($_POST['name'] ?? ''); ?>">

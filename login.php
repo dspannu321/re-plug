@@ -18,36 +18,70 @@ if (isset($_GET['logout'])) {
 
 // Already logged in
 if (!empty($_SESSION['user'])) {
-    $role = $_SESSION['user']['role'] ?? 'user';
-    header('Location: ' . ($role === 'admin' ? 'admin.php' : 'dashboard.php'));
-    exit;
+    require_once __DIR__ . '/app/config/db.php';
+    $uid = (int)($_SESSION['user']['id'] ?? 0);
+    if ($uid > 0) {
+        $stmt = $pdo->prepare("SELECT email_verified_at, role FROM users WHERE id = ?");
+        $stmt->execute([$uid]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && !empty($row['email_verified_at'])) {
+            $role = $row['role'] ?? 'user';
+            if ($role === 'admin') {
+                header('Location: admin.php');
+            } elseif ($role === 'driver') {
+                header('Location: driver.php');
+            } elseif ($role === 'technician') {
+                header('Location: technician.php');
+            } else {
+                header('Location: dashboard.php');
+            }
+            exit;
+        }
+    }
+    // If we get here, user is not verified or not found; clear session and show login form
+    $_SESSION = [];
 }
 
 require_once __DIR__ . '/app/config/db.php';
+require_once __DIR__ . '/app/config/csrf.php';
 
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_valid_csrf();
+
     $email = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
 
     if ($email === '' || $password === '') {
         $error = 'Please enter email and password.';
     } else {
-        $stmt = $pdo->prepare("SELECT id, name, email, password, role FROM users WHERE email = ?");
+        $stmt = $pdo->prepare("SELECT id, name, email, password, role, email_verified_at FROM users WHERE email = ?");
         $stmt->execute([$email]);
         $user = $stmt->fetch();
         if ($user && password_verify($password, $user['password'])) {
-            session_regenerate_id(true);
-            $_SESSION['user'] = [
-                'id'    => (int) $user['id'],
-                'name'  => $user['name'],
-                'email' => $user['email'],
-                'role'  => $user['role'],
-            ];
-            $role = $user['role'] ?? 'user';
-            header('Location: ' . ($role === 'admin' ? 'admin.php' : 'dashboard.php'));
-            exit;
+            if (empty($user['email_verified_at'])) {
+                $error = 'Please verify your email first. Check your inbox for the verification link.';
+            } else {
+                session_regenerate_id(true);
+                $_SESSION['user'] = [
+                    'id'    => (int) $user['id'],
+                    'name'  => $user['name'],
+                    'email' => $user['email'],
+                    'role'  => $user['role'],
+                ];
+                $role = $user['role'] ?? 'user';
+                if ($role === 'admin') {
+                    header('Location: admin.php');
+                } elseif ($role === 'driver') {
+                    header('Location: driver.php');
+                } elseif ($role === 'technician') {
+                    header('Location: technician.php');
+                } else {
+                    header('Location: dashboard.php');
+                }
+                exit;
+            }
         }
         $error = 'Invalid email or password.';
     }
@@ -218,6 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php endif; ?>
 
             <form method="post" action="login.php">
+                <?php echo csrf_field(); ?>
                 <div class="form-group">
                     <label for="email">Email</label>
                     <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email" value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>">

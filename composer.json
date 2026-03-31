@@ -1,0 +1,9 @@
+{
+  "name": "replug/app",
+  "description": "RePlug core PHP app",
+  "type": "project",
+  "require": {
+    "stripe/stripe-php": "^16.0",
+    "phpmailer/phpmailer": "^7.0"
+  }
+}

@@ -10,6 +10,7 @@ if (empty($_SESSION['user'])) {
 }
 
 require_once __DIR__ . '/app/config/db.php';
+require_once __DIR__ . '/app/config/csrf.php';
 
 /** Human-readable labels for item statuses */
 function item_status_label($status) {
@@ -43,12 +44,16 @@ function pickup_status_label($status) {
 $userId = (int) $_SESSION['user']['id'];
 $user = $_SESSION['user'];
 
-// Load fresh user row (for avatar)
-$stmt = $pdo->prepare("SELECT id, name, email, avatar FROM users WHERE id = ?");
+// Load fresh user row (for avatar + verification)
+$stmt = $pdo->prepare("SELECT id, name, email, avatar, email_verified_at FROM users WHERE id = ?");
 $stmt->execute([$userId]);
 $userRow = $stmt->fetch(PDO::FETCH_ASSOC);
 if ($userRow) {
     $user['avatar'] = $userRow['avatar'] ?? null;
+}
+if (!$userRow || empty($userRow['email_verified_at'])) {
+    header('Location: login.php');
+    exit;
 }
 
 $section = isset($_GET['section']) ? $_GET['section'] : 'listings';
@@ -84,6 +89,7 @@ if (!is_dir($itemsDir)) {
 
 // ---------- Profile: avatar upload ----------
 if ($section === 'profile' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['profile_avatar'])) {
+    require_valid_csrf();
     if (!empty($_FILES['avatar']['tmp_name']) && is_uploaded_file($_FILES['avatar']['tmp_name'])) {
         $finfo = new finfo(FILEINFO_MIME_TYPE);
         $mime = $finfo->file($_FILES['avatar']['tmp_name']);
@@ -113,6 +119,7 @@ if ($section === 'profile' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
 
 // ---------- Profile: change password ----------
 if ($section === 'profile' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['profile_password'])) {
+    require_valid_csrf();
     $current = $_POST['current_password'] ?? '';
     $new = $_POST['new_password'] ?? '';
     $confirm = $_POST['new_password_confirm'] ?? '';
@@ -143,6 +150,7 @@ if ($section === 'profile' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
 
 // ---------- Listings: create new item ----------
 if ($section === 'listings' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_listing'])) {
+    require_valid_csrf();
     $title = trim($_POST['title'] ?? '');
     $category = trim($_POST['category'] ?? '');
     $description = trim($_POST['description'] ?? '');
@@ -177,6 +185,7 @@ if ($section === 'listings' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_
 
 // ---------- Listings: edit item ----------
 if ($section === 'listings' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_item'])) {
+    require_valid_csrf();
     $itemId = (int) ($_POST['item_id'] ?? 0);
     if ($itemId > 0) {
         $stmt = $pdo->prepare("SELECT id FROM items WHERE id = ? AND recycler_user_id = ?");
@@ -221,6 +230,7 @@ if ($section === 'listings' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_
 
 // ---------- Listings: delete item ----------
 if ($section === 'listings' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_item'])) {
+    require_valid_csrf();
     $itemId = (int) ($_POST['item_id'] ?? 0);
     if ($itemId > 0) {
         $stmt = $pdo->prepare("SELECT id, status FROM items WHERE id = ? AND recycler_user_id = ?");
@@ -247,6 +257,7 @@ try {
 
 // ---------- Pickups: request new pickup ----------
 if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_pickup'])) {
+    require_valid_csrf();
     $itemIds = isset($_POST['item_ids']) && is_array($_POST['item_ids']) ? array_map('intval', $_POST['item_ids']) : [];
     $address = trim($_POST['address_text'] ?? '');
     $windowStart = trim($_POST['pickup_window_start'] ?? '');
@@ -297,6 +308,7 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
 
 // ---------- Pickups: edit pickup (only if not picked_up) ----------
 if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_pickup'])) {
+    require_valid_csrf();
     $pickupId = (int) ($_POST['pickup_id'] ?? 0);
     if ($pickupId > 0) {
         $stmt = $pdo->prepare("SELECT id, status FROM pickups WHERE id = ? AND recycler_user_id = ?");
@@ -362,6 +374,7 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
 
 // ---------- Pickups: cancel pickup (only if not picked_up); release items back to draft ----------
 if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cancel_pickup'])) {
+    require_valid_csrf();
     $pickupId = (int) ($_POST['pickup_id'] ?? 0);
     if ($pickupId > 0) {
         $stmt = $pdo->prepare("SELECT id, status FROM pickups WHERE id = ? AND recycler_user_id = ?");
@@ -991,6 +1004,7 @@ if (!empty($user['avatar'])) {
                         <?php endif; ?>
                     </div>
                     <form method="post" action="dashboard.php?section=profile" enctype="multipart/form-data">
+                        <?php echo csrf_field(); ?>
                         <input type="hidden" name="profile_avatar" value="1">
                         <div class="form-group">
                             <label for="avatar">Upload new avatar</label>
@@ -1004,6 +1018,7 @@ if (!empty($user['avatar'])) {
                 <div class="card">
                     <h2>Change password</h2>
                     <form method="post" action="dashboard.php?section=profile">
+                        <?php echo csrf_field(); ?>
                         <input type="hidden" name="profile_password" value="1">
                         <div class="form-group">
                             <label for="current_password">Current password</label>
@@ -1033,6 +1048,7 @@ if (!empty($user['avatar'])) {
                     <div class="empty-listings">
                         <p>You don’t have any listings yet. Create your first one to request a pickup.</p>
                         <form method="post" action="dashboard.php?section=listings" enctype="multipart/form-data" style="max-width: 420px; margin: 0 auto; text-align: left;">
+                            <?php echo csrf_field(); ?>
                             <input type="hidden" name="create_listing" value="1">
                             <div class="form-group">
                                 <label for="title">Title *</label>
@@ -1066,6 +1082,7 @@ if (!empty($user['avatar'])) {
                     <div id="new-listing-form" class="card" style="display: none;">
                         <h2>New listing</h2>
                         <form method="post" action="dashboard.php?section=listings" enctype="multipart/form-data">
+                            <?php echo csrf_field(); ?>
                             <input type="hidden" name="create_listing" value="1">
                             <div class="form-group">
                                 <label for="title2">Title *</label>
@@ -1177,6 +1194,7 @@ if (!empty($user['avatar'])) {
                         <p class="msg error">You have no draft listings. Add items in <a href="dashboard.php?section=listings">My listings</a> first, then request a pickup.</p>
                     <?php else: ?>
                         <form method="post" action="dashboard.php?section=pickups">
+                            <?php echo csrf_field(); ?>
                             <input type="hidden" name="request_pickup" value="1">
                             <div class="form-group">
                                 <label>Select items to pick up</label>

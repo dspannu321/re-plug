@@ -9,7 +9,7 @@ CREATE TABLE `replug_db`.`users` (
   PRIMARY KEY (`id`));
 
 
-CREATE TABLE replug_db`.`items` (
+CREATE TABLE `replug_db`.`items` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `recycler_user_id` INT NOT NULL,
   `category` VARCHAR(64) NOT NULL,
