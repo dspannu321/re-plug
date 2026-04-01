@@ -1,27 +1,14 @@
 <?php
 /**
- * RePlug — Login. Redirects to dashboard on success.
+ * RePlug — Set a new password using a one-time link from email.
  */
 session_start();
 
-// Logout
-if (isset($_GET['logout'])) {
-    $_SESSION = [];
-    if (ini_get('session.use_cookies')) {
-        $p = session_get_cookie_params();
-        setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
-    }
-    session_destroy();
-    header('Location: index.php');
-    exit;
-}
-
-// Already logged in
 if (!empty($_SESSION['user'])) {
     require_once __DIR__ . '/app/config/db.php';
-    $uid = (int)($_SESSION['user']['id'] ?? 0);
+    $uid = (int) ($_SESSION['user']['id'] ?? 0);
     if ($uid > 0) {
-        $stmt = $pdo->prepare("SELECT email_verified_at, role FROM users WHERE id = ?");
+        $stmt = $pdo->prepare('SELECT email_verified_at, role FROM users WHERE id = ?');
         $stmt->execute([$uid]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($row && !empty($row['email_verified_at'])) {
@@ -38,7 +25,6 @@ if (!empty($_SESSION['user'])) {
             exit;
         }
     }
-    // If we get here, user is not verified or not found; clear session and show login form
     $_SESSION = [];
 }
 
@@ -46,63 +32,77 @@ require_once __DIR__ . '/app/config/db.php';
 require_once __DIR__ . '/app/config/csrf.php';
 
 $error = '';
-$info = '';
-if (isset($_GET['registered']) && $_GET['registered'] === '1') {
-    $info = 'Check your email to verify your account, then log in.';
-}
-if (isset($_GET['reset']) && $_GET['reset'] === 'sent') {
-    $info = 'If an account exists for that email, we have sent a link to reset your password.';
-}
-if (isset($_GET['reset']) && $_GET['reset'] === 'done') {
-    $info = 'Your password was updated. You can log in with your new password.';
-}
+$tokenFromUrl = trim($_GET['token'] ?? '');
+$tokenFromPost = trim($_POST['token'] ?? '');
+$activeToken = $tokenFromUrl !== '' ? $tokenFromUrl : $tokenFromPost;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    require_valid_csrf();
-
-    $email = trim($_POST['email'] ?? '');
-    $password = $_POST['password'] ?? '';
-
-    if ($email === '' || $password === '') {
-        $error = 'Please enter email and password.';
-    } else {
-        $stmt = $pdo->prepare("SELECT id, name, email, password, role, email_verified_at FROM users WHERE email = ?");
-        $stmt->execute([$email]);
-        $user = $stmt->fetch();
-        if ($user && password_verify($password, $user['password'])) {
-            if (empty($user['email_verified_at'])) {
-                $error = 'Please verify your email first. Check your inbox for the verification link.';
-            } else {
-                session_regenerate_id(true);
-                $_SESSION['user'] = [
-                    'id'    => (int) $user['id'],
-                    'name'  => $user['name'],
-                    'email' => $user['email'],
-                    'role'  => $user['role'],
-                ];
-                $role = $user['role'] ?? 'user';
-                if ($role === 'admin') {
-                    header('Location: admin.php');
-                } elseif ($role === 'driver') {
-                    header('Location: driver.php');
-                } elseif ($role === 'technician') {
-                    header('Location: technician.php');
-                } else {
-                    header('Location: dashboard.php');
-                }
-                exit;
-            }
+$resetRow = null;
+if ($activeToken !== '') {
+    try {
+        $hash = hash('sha256', $activeToken);
+        $stmt = $pdo->prepare(
+            'SELECT pr.id, pr.user_id, pr.expires_at
+            FROM password_resets pr
+            WHERE pr.token_hash = ?
+            LIMIT 1'
+        );
+        $stmt->execute([$hash]);
+        $resetRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($resetRow && strtotime($resetRow['expires_at']) < time()) {
+            $resetRow = null;
+            $error = 'This reset link has expired. Please request a new one.';
         }
-        $error = 'Invalid email or password.';
+    } catch (PDOException $e) {
+        $error = 'Password reset is not available. Please contact support.';
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $error = 'Invalid reset link.';
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $activeToken === '') {
+    $error = 'Invalid reset link.';
+}
+
+if ($activeToken !== '' && !$resetRow && $error === '') {
+    $error = 'This reset link is invalid or has expired.';
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error === '' && $resetRow) {
+    require_valid_csrf();
+    $password = $_POST['password'] ?? '';
+    $passwordConfirm = $_POST['password_confirm'] ?? '';
+
+    if (strlen($password) < 8) {
+        $error = 'Password must be at least 8 characters.';
+    } elseif ($password !== $passwordConfirm) {
+        $error = 'Passwords do not match.';
+    } else {
+        try {
+            $pdo->beginTransaction();
+            $newHash = password_hash($password, PASSWORD_DEFAULT);
+            $pdo->prepare('UPDATE users SET password = ? WHERE id = ?')->execute([$newHash, (int) $resetRow['user_id']]);
+            $pdo->prepare('DELETE FROM password_resets WHERE user_id = ?')->execute([(int) $resetRow['user_id']]);
+            $pdo->commit();
+            header('Location: login.php?reset=done');
+            exit;
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $error = 'Could not update password. Please try again.';
+        }
     }
 }
+
+$showForm = (bool) $resetRow;
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Log in — RePlug</title>
+    <title>Reset password — RePlug</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -168,7 +168,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transition: background-color 0.2s, border-color 0.2s, color 0.2s;
             margin-left: 0.5rem;
         }
-        .header-nav .btn-primary { background: #1E88E5; color: #FFFFFF; border: none; }
+        .header-nav .btn-primary { background: #1E88E5; color: #FFFFFF; border: none; text-decoration: none; display: inline-block; }
         .header-nav .btn-primary:hover { background: #1565C0; color: #FFFFFF; }
 
         .main {
@@ -188,7 +188,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         .card h1 { font-size: 22px; font-weight: 600; color: #1F2933; margin-bottom: 0.5rem; }
         .card .subtitle { font-size: 14px; color: #5F6C7B; margin-bottom: 1.5rem; }
-        .card .subtitle a { font-weight: 500; }
 
         .form-group { margin-bottom: 1.25rem; }
         .form-group label {
@@ -211,7 +210,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transition: border-color 0.2s;
         }
         .form-group input:focus { outline: none; border-color: #1E88E5; }
-        .form-group input::placeholder { color: #5F6C7B; }
 
         .btn-submit {
             width: 100%;
@@ -236,20 +234,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: #FFEBEE;
             border-radius: 6px;
         }
-        .info-msg {
-            padding: 10px 12px;
-            margin-bottom: 1rem;
-            font-size: 14px;
-            color: #1565C0;
-            background: #E3F2FD;
-            border-radius: 6px;
-        }
-        .form-footer-link {
-            text-align: center;
-            margin-top: 1.25rem;
-            font-size: 14px;
-            color: #5F6C7B;
-        }
     </style>
 </head>
 <body>
@@ -268,29 +252,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <main class="main">
         <div class="card">
-            <h1>Log in</h1>
-            <p class="subtitle">Don’t have an account? <a href="register.php">Register</a></p>
-
-            <?php if ($info): ?>
-                <p class="info-msg"><?php echo htmlspecialchars($info); ?></p>
+            <h1>Reset password</h1>
+            <?php if ($showForm): ?>
+                <p class="subtitle">Choose a new password for your account.</p>
+                <?php if ($error): ?>
+                    <p class="error-msg"><?php echo htmlspecialchars($error); ?></p>
+                <?php endif; ?>
+                <form method="post" action="reset_password.php">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="token" value="<?php echo htmlspecialchars($activeToken); ?>">
+                    <div class="form-group">
+                        <label for="password">New password</label>
+                        <input type="password" id="password" name="password" required minlength="8" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="password_confirm">Confirm new password</label>
+                        <input type="password" id="password_confirm" name="password_confirm" required minlength="8" autocomplete="new-password">
+                    </div>
+                    <button type="submit" class="btn-submit">Save new password</button>
+                </form>
+            <?php else: ?>
+                <p class="subtitle"><?php echo htmlspecialchars($error !== '' ? $error : 'Something went wrong.'); ?></p>
+                <p class="subtitle"><a href="forgot_password.php">Request a new link</a> or <a href="login.php">log in</a>.</p>
             <?php endif; ?>
-            <?php if ($error): ?>
-                <p class="error-msg"><?php echo htmlspecialchars($error); ?></p>
-            <?php endif; ?>
-
-            <form method="post" action="login.php">
-                <?php echo csrf_field(); ?>
-                <div class="form-group">
-                    <label for="email">Email</label>
-                    <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email" value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>">
-                </div>
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" name="password" placeholder="Your password" required autocomplete="current-password">
-                </div>
-                <button type="submit" class="btn-submit">Log in</button>
-            </form>
-            <p class="form-footer-link"><a href="forgot_password.php">Forgot password?</a></p>
         </div>
     </main>
 </body>

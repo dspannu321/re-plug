@@ -1,27 +1,14 @@
 <?php
 /**
- * RePlug — Login. Redirects to dashboard on success.
+ * RePlug — Request a password reset link by email.
  */
 session_start();
 
-// Logout
-if (isset($_GET['logout'])) {
-    $_SESSION = [];
-    if (ini_get('session.use_cookies')) {
-        $p = session_get_cookie_params();
-        setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
-    }
-    session_destroy();
-    header('Location: index.php');
-    exit;
-}
-
-// Already logged in
 if (!empty($_SESSION['user'])) {
     require_once __DIR__ . '/app/config/db.php';
-    $uid = (int)($_SESSION['user']['id'] ?? 0);
+    $uid = (int) ($_SESSION['user']['id'] ?? 0);
     if ($uid > 0) {
-        $stmt = $pdo->prepare("SELECT email_verified_at, role FROM users WHERE id = ?");
+        $stmt = $pdo->prepare('SELECT email_verified_at, role FROM users WHERE id = ?');
         $stmt->execute([$uid]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($row && !empty($row['email_verified_at'])) {
@@ -38,71 +25,62 @@ if (!empty($_SESSION['user'])) {
             exit;
         }
     }
-    // If we get here, user is not verified or not found; clear session and show login form
     $_SESSION = [];
 }
 
 require_once __DIR__ . '/app/config/db.php';
 require_once __DIR__ . '/app/config/csrf.php';
+require_once __DIR__ . '/mailer.php';
+require_once __DIR__ . '/app/config/tokens.php';
 
 $error = '';
-$info = '';
-if (isset($_GET['registered']) && $_GET['registered'] === '1') {
-    $info = 'Check your email to verify your account, then log in.';
-}
-if (isset($_GET['reset']) && $_GET['reset'] === 'sent') {
-    $info = 'If an account exists for that email, we have sent a link to reset your password.';
-}
-if (isset($_GET['reset']) && $_GET['reset'] === 'done') {
-    $info = 'Your password was updated. You can log in with your new password.';
-}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
-
     $email = trim($_POST['email'] ?? '');
-    $password = $_POST['password'] ?? '';
 
-    if ($email === '' || $password === '') {
-        $error = 'Please enter email and password.';
+    if ($email === '') {
+        $error = 'Please enter your email address.';
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $error = 'Please enter a valid email address.';
     } else {
-        $stmt = $pdo->prepare("SELECT id, name, email, password, role, email_verified_at FROM users WHERE email = ?");
-        $stmt->execute([$email]);
-        $user = $stmt->fetch();
-        if ($user && password_verify($password, $user['password'])) {
-            if (empty($user['email_verified_at'])) {
-                $error = 'Please verify your email first. Check your inbox for the verification link.';
-            } else {
-                session_regenerate_id(true);
-                $_SESSION['user'] = [
-                    'id'    => (int) $user['id'],
-                    'name'  => $user['name'],
-                    'email' => $user['email'],
-                    'role'  => $user['role'],
-                ];
-                $role = $user['role'] ?? 'user';
-                if ($role === 'admin') {
-                    header('Location: admin.php');
-                } elseif ($role === 'driver') {
-                    header('Location: driver.php');
-                } elseif ($role === 'technician') {
-                    header('Location: technician.php');
-                } else {
-                    header('Location: dashboard.php');
-                }
-                exit;
+        try {
+            $stmt = $pdo->prepare('SELECT id, name, email FROM users WHERE email = ? LIMIT 1');
+            $stmt->execute([$email]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $pdo->prepare('DELETE FROM password_resets WHERE user_id = ?')->execute([(int) $user['id']]);
+                $rawToken = generate_token(24);
+                $tokenHash = hash('sha256', $rawToken);
+                $expiresAt = date('Y-m-d H:i:s', time() + 3600);
+                $ins = $pdo->prepare('INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)');
+                $ins->execute([(int) $user['id'], $tokenHash, $expiresAt]);
+
+                $resetLink = APP_URL . '/reset_password.php?token=' . urlencode($rawToken);
+                $subject = 'Reset your password — RePlug';
+                $name = (string) ($user['name'] ?? '');
+                $html = '<p>Hi ' . htmlspecialchars($name !== '' ? $name : 'there') . ',</p>'
+                    . '<p>We received a request to reset your RePlug password. Click the button below to choose a new password. This link expires in one hour.</p>'
+                    . '<p><a href="' . htmlspecialchars($resetLink) . '" style="display:inline-block;padding:10px 18px;border-radius:6px;background:#1E88E5;color:#fff;text-decoration:none;">Reset password</a></p>'
+                    . '<p>If you did not ask for this, you can ignore this email.</p>'
+                    . '<p style="font-size:13px;color:#5F6C7B;">Or copy this link: ' . htmlspecialchars($resetLink) . '</p>';
+                replug_send_mail($user['email'], $name, $subject, $html);
             }
+        } catch (PDOException $e) {
+            // Table missing or DB error — still redirect to avoid leaking details
         }
-        $error = 'Invalid email or password.';
+        header('Location: login.php?reset=sent');
+        exit;
     }
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Log in — RePlug</title>
+    <title>Forgot password — RePlug</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -168,7 +146,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transition: background-color 0.2s, border-color 0.2s, color 0.2s;
             margin-left: 0.5rem;
         }
-        .header-nav .btn-primary { background: #1E88E5; color: #FFFFFF; border: none; }
+        .header-nav .btn-primary { background: #1E88E5; color: #FFFFFF; border: none; text-decoration: none; display: inline-block; }
         .header-nav .btn-primary:hover { background: #1565C0; color: #FFFFFF; }
 
         .main {
@@ -211,7 +189,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transition: border-color 0.2s;
         }
         .form-group input:focus { outline: none; border-color: #1E88E5; }
-        .form-group input::placeholder { color: #5F6C7B; }
 
         .btn-submit {
             width: 100%;
@@ -236,20 +213,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: #FFEBEE;
             border-radius: 6px;
         }
-        .info-msg {
-            padding: 10px 12px;
-            margin-bottom: 1rem;
-            font-size: 14px;
-            color: #1565C0;
-            background: #E3F2FD;
-            border-radius: 6px;
-        }
-        .form-footer-link {
-            text-align: center;
-            margin-top: 1.25rem;
-            font-size: 14px;
-            color: #5F6C7B;
-        }
     </style>
 </head>
 <body>
@@ -268,29 +231,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <main class="main">
         <div class="card">
-            <h1>Log in</h1>
-            <p class="subtitle">Don’t have an account? <a href="register.php">Register</a></p>
+            <h1>Forgot password</h1>
+            <p class="subtitle">Enter the email for your account. If it exists, we will send a reset link. <a href="login.php">Back to log in</a></p>
 
-            <?php if ($info): ?>
-                <p class="info-msg"><?php echo htmlspecialchars($info); ?></p>
-            <?php endif; ?>
             <?php if ($error): ?>
                 <p class="error-msg"><?php echo htmlspecialchars($error); ?></p>
             <?php endif; ?>
 
-            <form method="post" action="login.php">
+            <form method="post" action="forgot_password.php">
                 <?php echo csrf_field(); ?>
                 <div class="form-group">
                     <label for="email">Email</label>
                     <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email" value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>">
                 </div>
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" name="password" placeholder="Your password" required autocomplete="current-password">
-                </div>
-                <button type="submit" class="btn-submit">Log in</button>
+                <button type="submit" class="btn-submit">Send reset link</button>
             </form>
-            <p class="form-footer-link"><a href="forgot_password.php">Forgot password?</a></p>
         </div>
     </main>
 </body>

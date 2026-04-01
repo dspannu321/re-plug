@@ -163,6 +163,54 @@ try {
     // pickups table might not exist yet
 }
 
+$pickupDetailView = null;
+$pickupViewError = '';
+$viewPickupId = ($section === 'pickups' && isset($_GET['view'])) ? (int) $_GET['view'] : 0;
+if ($section === 'pickups' && $viewPickupId > 0) {
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT
+                p.id,
+                p.recycler_user_id,
+                p.driver_user_id,
+                p.pickup_window_start,
+                p.pickup_window_end,
+                p.address_text,
+                p.status,
+                p.created_at,
+                ru.name AS recycler_name,
+                ru.email AS recycler_email,
+                du.name AS driver_name,
+                du.email AS driver_email,
+                (SELECT COUNT(*) FROM pickup_items pi WHERE pi.pickup_id = p.id) AS item_count
+            FROM pickups p
+            JOIN users ru ON ru.id = p.recycler_user_id
+            LEFT JOIN users du ON du.id = p.driver_user_id
+            WHERE p.id = ?"
+        );
+        $stmt->execute([$viewPickupId]);
+        $detailPickup = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$detailPickup) {
+            $pickupViewError = 'Pickup not found.';
+        } else {
+            $stmt = $pdo->prepare(
+                "SELECT i.id, i.title, i.category, i.description, i.condition_notes, i.photos_json, i.status, i.created_at
+                FROM pickup_items pi
+                JOIN items i ON i.id = pi.item_id
+                WHERE pi.pickup_id = ?
+                ORDER BY i.id ASC"
+            );
+            $stmt->execute([$viewPickupId]);
+            $pickupDetailView = [
+                'pickup' => $detailPickup,
+                'items' => $stmt->fetchAll(PDO::FETCH_ASSOC),
+            ];
+        }
+    } catch (PDOException $e) {
+        $pickupViewError = 'Could not load pickup.';
+    }
+}
+
 // ---------- Admin Users: update role ----------
 if ($section === 'users' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_user_role'])) {
     require_valid_csrf();
@@ -594,6 +642,32 @@ if (!empty($user['avatar'])) {
         .pickup-actions form { margin: 0; }
         .pickup-actions select { min-width: 130px; padding: 8px 10px; font-size: 13px; border-radius: 8px; border: 1px solid #E5E7EB; }
         .small-note { color: #5F6C7B; font-size: 12px; }
+        .pickup-detail-back { display: inline-block; margin-bottom: 1rem; font-size: 14px; font-weight: 500; }
+        .pickup-detail-meta { font-size: 14px; color: #1F2933; line-height: 1.6; margin-bottom: 1.25rem; }
+        .pickup-detail-meta dt { font-size: 12px; font-weight: 600; color: #5F6C7B; text-transform: uppercase; letter-spacing: 0.02em; margin-top: 0.75rem; }
+        .pickup-detail-meta dt:first-child { margin-top: 0; }
+        .pickup-detail-meta dd { margin: 0.25rem 0 0 0; }
+        .pickup-detail-item {
+            border: 1px solid #F0F2F5;
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
+            background: #FAFBFC;
+        }
+        .pickup-detail-item h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.35rem; color: #1F2933; }
+        .pickup-detail-item .item-desc { font-size: 14px; color: #5F6C7B; white-space: pre-wrap; margin: 0.5rem 0; }
+        .pickup-detail-photos { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; }
+        .pickup-detail-photos a { display: block; border-radius: 8px; overflow: hidden; border: 1px solid #E5E7EB; background: #fff; }
+        .pickup-detail-photos img {
+            display: block;
+            max-width: 220px;
+            max-height: 220px;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            vertical-align: top;
+        }
+        .pickup-detail-no-photo { font-size: 13px; color: #5F6C7B; font-style: italic; }
 
         @media (max-width: 640px) {
             .main-wrap { flex-direction: column; }
@@ -640,10 +714,108 @@ if (!empty($user['avatar'])) {
             <?php if ($section === 'pickups'): ?>
                 <h1>Pickups</h1>
                 <p class="page-desc">Manage all pickup requests: view status, assign drivers, and update schedules.</p>
+                <?php if ($pickupMsg): ?><p class="msg success"><?php echo htmlspecialchars($pickupMsg); ?></p><?php endif; ?>
+                <?php if ($pickupError): ?><p class="msg error"><?php echo htmlspecialchars($pickupError); ?></p><?php endif; ?>
+
+                <?php if ($viewPickupId > 0): ?>
+                    <a href="admin.php?section=pickups" class="pickup-detail-back">← All pickups</a>
+                    <?php if ($pickupViewError): ?>
+                        <div class="card">
+                            <h2>Pickup #<?php echo (int) $viewPickupId; ?></h2>
+                            <p class="msg error"><?php echo htmlspecialchars($pickupViewError); ?></p>
+                        </div>
+                    <?php elseif ($pickupDetailView): ?>
+                        <?php
+                        $dp = $pickupDetailView['pickup'];
+                        $ditems = $pickupDetailView['items'];
+                        ?>
+                        <div class="card">
+                            <h2>Pickup #<?php echo (int) $dp['id']; ?></h2>
+                            <dl class="pickup-detail-meta">
+                                <dt>Status</dt>
+                                <dd><span class="status-badge status-<?php echo htmlspecialchars($dp['status']); ?>"><?php echo htmlspecialchars(pickup_status_label($dp['status'])); ?></span></dd>
+                                <dt>Recycler</dt>
+                                <dd><?php echo htmlspecialchars($dp['recycler_name'] ?: ('User #' . (int) $dp['recycler_user_id'])); ?> — <?php echo htmlspecialchars($dp['recycler_email'] ?? ''); ?></dd>
+                                <dt>Driver</dt>
+                                <dd>
+                                    <?php if (!empty($dp['driver_user_id'])): ?>
+                                        <?php echo htmlspecialchars($dp['driver_name'] ?: ('Driver #' . (int) $dp['driver_user_id'])); ?> — <?php echo htmlspecialchars($dp['driver_email'] ?? ''); ?>
+                                    <?php else: ?>
+                                        <span class="small-note">Unassigned</span>
+                                    <?php endif; ?>
+                                </dd>
+                                <dt>Pickup window</dt>
+                                <dd><?php echo date('M j, Y g:i A', strtotime($dp['pickup_window_start'])); ?> — <?php echo date('M j, Y g:i A', strtotime($dp['pickup_window_end'])); ?></dd>
+                                <dt>Address</dt>
+                                <dd><?php echo nl2br(htmlspecialchars((string) $dp['address_text'])); ?></dd>
+                                <dt>Requested</dt>
+                                <dd><?php echo !empty($dp['created_at']) ? date('M j, Y g:i A', strtotime($dp['created_at'])) : '—'; ?></dd>
+                            </dl>
+                            <h2 style="margin-top: 1.5rem;">Items in this pickup (<?php echo count($ditems); ?>)</h2>
+                            <?php if (count($ditems) === 0): ?>
+                                <p class="placeholder-desc">No items linked to this pickup.</p>
+                            <?php else: ?>
+                                <?php foreach ($ditems as $dit): ?>
+                                    <?php
+                                    $photoPaths = [];
+                                    if (!empty($dit['photos_json'])) {
+                                        $decoded = json_decode($dit['photos_json'], true);
+                                        $photoPaths = is_array($decoded) ? $decoded : [];
+                                    }
+                                    ?>
+                                    <div class="pickup-detail-item">
+                                        <h3>#<?php echo (int) $dit['id']; ?> — <?php echo htmlspecialchars($dit['title'] ?: 'Untitled'); ?></h3>
+                                        <p class="small-note"><?php echo htmlspecialchars($dit['category'] ?? ''); ?>
+                                            <?php if (!empty($dit['status'])): ?>
+                                                · <span class="status-badge status-<?php echo htmlspecialchars((string) $dit['status']); ?>"><?php echo htmlspecialchars(ucwords(str_replace('_', ' ', (string) $dit['status']))); ?></span>
+                                            <?php endif; ?>
+                                        </p>
+                                        <?php if (!empty($dit['description'])): ?>
+                                            <p class="item-desc"><?php echo htmlspecialchars($dit['description']); ?></p>
+                                        <?php endif; ?>
+                                        <?php if (!empty($dit['condition_notes'])): ?>
+                                            <p class="small-note"><strong>Condition:</strong> <?php echo nl2br(htmlspecialchars((string) $dit['condition_notes'])); ?></p>
+                                        <?php endif; ?>
+                                        <?php if (!empty($photoPaths)): ?>
+                                            <?php
+                                            $photoShown = 0;
+                                            ob_start();
+                                            ?>
+                                            <div class="pickup-detail-photos">
+                                                <?php foreach ($photoPaths as $rel): ?>
+                                                    <?php
+                                                    $rel = is_string($rel) ? $rel : '';
+                                                    $rel = str_replace(['../', '..\\'], '', $rel);
+                                                    if ($rel === '') {
+                                                        continue;
+                                                    }
+                                                    $full = __DIR__ . '/public/storage/uploads/' . $rel;
+                                                    $url = 'public/storage/uploads/' . $rel;
+                                                    if (is_file($full)):
+                                                        $photoShown++;
+                                                    ?>
+                                                        <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" rel="noopener noreferrer">
+                                                            <img src="<?php echo htmlspecialchars($url); ?>" alt="">
+                                                        </a>
+                                                    <?php endif; ?>
+                                                <?php endforeach; ?>
+                                            </div>
+                                            <?php
+                                            $photosHtml = ob_get_clean();
+                                            echo $photoShown > 0 ? $photosHtml : '<p class="pickup-detail-no-photo">Photo file(s) missing on server.</p>';
+                                            ?>
+                                        <?php else: ?>
+                                            <p class="pickup-detail-no-photo">No photos for this item.</p>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+                <?php endif; ?>
+
                 <div class="card">
                     <h2>All pickups</h2>
-                    <?php if ($pickupMsg): ?><p class="msg success"><?php echo htmlspecialchars($pickupMsg); ?></p><?php endif; ?>
-                    <?php if ($pickupError): ?><p class="msg error"><?php echo htmlspecialchars($pickupError); ?></p><?php endif; ?>
                     <?php if (count($pickups) === 0): ?>
                         <p class="placeholder-desc">No pickups found yet.</p>
                     <?php else: ?>
@@ -686,6 +858,7 @@ if (!empty($user['avatar'])) {
                                             <td><?php echo htmlspecialchars(mb_strimwidth((string) $pu['address_text'], 0, 70, '...')); ?></td>
                                             <td>
                                                 <div class="pickup-actions">
+                                                    <a href="admin.php?section=pickups&amp;view=<?php echo (int) $pu['id']; ?>" class="btn-secondary">View</a>
                                                     <?php if (in_array($pu['status'], ['requested', 'scheduled'], true)): ?>
                                                         <form method="post" action="admin.php?section=pickups">
                                                             <?php echo csrf_field(); ?>
