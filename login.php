@@ -71,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $user = $stmt->fetch();
         if ($user && password_verify($password, $user['password'])) {
             if (empty($user['email_verified_at'])) {
-                $error = 'Please verify your email first. Check your inbox for the verification link.';
+                $error = 'Please verify your email before logging in. Check your inbox for the verification link.';
             } else {
                 session_regenerate_id(true);
                 $_SESSION['user'] = [
@@ -92,8 +92,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 exit;
             }
+        } else {
+            $error = 'Invalid email or password.';
         }
-        $error = 'Invalid email or password.';
     }
 }
 ?>
