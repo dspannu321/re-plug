@@ -5,12 +5,32 @@
 session_start();
 require_once __DIR__ . '/app/config/db.php';
 require_once __DIR__ . '/app/config/audit.php';
+require_once __DIR__ . '/app/config/csrf.php';
 
 $listingId = (int) ($_GET['listing_id'] ?? 0);
 $listingError = '';
 $checkoutMsg = '';
 $listing = null;
 $listings = [];
+$isLoggedIn = false;
+$currentUserRole = '';
+
+if (!empty($_SESSION['user'])) {
+    $sessionUserId = (int) ($_SESSION['user']['id'] ?? 0);
+    if ($sessionUserId > 0) {
+        $stmt = $pdo->prepare("SELECT role, email_verified_at FROM users WHERE id = ?");
+        $stmt->execute([$sessionUserId]);
+        $authUser = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($authUser && !empty($authUser['email_verified_at'])) {
+            $isLoggedIn = true;
+            $currentUserRole = (string) ($authUser['role'] ?? '');
+        } else {
+            $_SESSION = [];
+        }
+    } else {
+        $_SESSION = [];
+    }
+}
 
 try {
     if (isset($_GET['checkout']) && $_GET['checkout'] === 'cancel') {
@@ -18,7 +38,7 @@ try {
     } elseif (isset($_GET['checkout']) && $_GET['checkout'] === 'error') {
         $checkoutMsg = trim($_GET['msg'] ?? 'Checkout failed.');
     } elseif (isset($_GET['checkout']) && $_GET['checkout'] === 'success') {
-        if (empty($_SESSION['user'])) {
+        if (!$isLoggedIn) {
             $listingError = 'Please log in first.';
         } elseif (empty(STRIPE_SECRET_KEY)) {
             $listingError = 'Stripe is not configured.';
@@ -197,11 +217,16 @@ function listing_photo_url($photosJson) {
             </a>
             <nav class="header-nav">
                 <a href="index.php" class="btn btn-secondary">Home</a>
-                <?php if (!empty($_SESSION['user'])): ?>
+                <?php if ($isLoggedIn): ?>
                     <a href="my_orders.php" class="btn btn-secondary">My orders</a>
                 <?php endif; ?>
-                <a href="register.php" class="btn btn-secondary">Register</a>
-                <a href="login.php" class="btn btn-primary">Log in</a>
+                <?php if ($isLoggedIn): ?>
+                    <a href="dashboard.php" class="btn btn-secondary">Dashboard</a>
+                    <a href="login.php?logout=1" class="btn btn-primary">Log out</a>
+                <?php else: ?>
+                    <a href="register.php" class="btn btn-secondary">Register</a>
+                    <a href="login.php" class="btn btn-primary">Log in</a>
+                <?php endif; ?>
             </nav>
         </div>
     </header>
@@ -230,14 +255,15 @@ function listing_photo_url($photosJson) {
                 <div>
                     <h2><?php echo htmlspecialchars($listing['title']); ?></h2>
                     <p class="meta">Category: <?php echo htmlspecialchars($listing['category'] ?: 'General'); ?> • Listed <?php echo date('M j, Y', strtotime($listing['created_at'])); ?></p>
-                    <p class="detail-price">PHP <?php echo number_format((float)$listing['price'], 2); ?></p>
+                    <p class="detail-price">$<?php echo number_format((float)$listing['price'], 2); ?></p>
                     <p class="detail-p"><?php echo nl2br(htmlspecialchars($listing['description'] ?: 'No description provided.')); ?></p>
                     <div style="margin-top: 1rem;">
-                        <?php if (!empty($_SESSION['user'])): ?>
-                            <?php if (($_SESSION['user']['role'] ?? '') === 'admin'): ?>
+                        <?php if ($isLoggedIn): ?>
+                            <?php if ($currentUserRole === 'admin'): ?>
                                 <span class="desc">Admins cannot purchase listings.</span>
                             <?php else: ?>
                                 <form method="post" action="stripe_checkout.php">
+                                    <?php echo csrf_field(); ?>
                                     <input type="hidden" name="listing_id" value="<?php echo (int)$listing['id']; ?>">
                                     <button type="submit" class="btn btn-primary">Buy with Stripe</button>
                                 </form>
@@ -265,7 +291,7 @@ function listing_photo_url($photosJson) {
                         <div class="body">
                             <div class="name"><?php echo htmlspecialchars($row['title']); ?></div>
                             <div class="meta"><?php echo htmlspecialchars($row['category'] ?: 'General'); ?> • <?php echo date('M j, Y', strtotime($row['created_at'])); ?></div>
-                            <div class="price">PHP <?php echo number_format((float)$row['price'], 2); ?></div>
+                            <div class="price">$<?php echo number_format((float)$row['price'], 2); ?></div>
                             <a class="btn btn-secondary" href="marketplace.php?listing_id=<?php echo (int)$row['id']; ?>">View details</a>
                         </div>
                     </article>

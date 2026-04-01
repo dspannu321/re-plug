@@ -96,7 +96,7 @@ try {
                                         <span>-</span>
                                     <?php endif; ?>
                                 </td>
-                                <td>PHP <?php echo number_format((float)$o['amount'], 2); ?></td>
+                                <td>$<?php echo number_format((float)$o['amount'], 2); ?></td>
                                 <td><span class="badge"><?php echo htmlspecialchars(ucfirst((string)$o['status'])); ?></span></td>
                                 <td><?php echo !empty($o['created_at']) ? date('M j, Y g:i A', strtotime($o['created_at'])) : '-'; ?></td>
                             </tr>

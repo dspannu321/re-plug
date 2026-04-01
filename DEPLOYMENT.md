@@ -71,7 +71,15 @@ RePlug currently uses these SQL files in `database/`:
 
 - `items_table.sql`
 - `pickups_table.sql`
+- `inspections_table.sql`
+- `marketplace_listings_table.sql`
+- `orders_table.sql`
+- `payouts_table.sql`
+- `audit_logs_table.sql`
+- `email_verifications_table.sql`
+- `password_resets_table.sql`
 - `alter_users_avatar.sql` (only if avatar column is missing)
+- `alter_users_email_verified.sql` (only if `email_verified_at` is missing)
 
 Create `users` table first:
 
@@ -83,6 +91,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `email` VARCHAR(128) NOT NULL UNIQUE,
   `password` VARCHAR(255) NOT NULL,
   `role` ENUM('admin','technician','driver','user') NULL DEFAULT 'user',
+  `email_verified_at` DATETIME NULL DEFAULT NULL,
   `avatar` VARCHAR(255) NULL DEFAULT NULL,
   `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
@@ -94,6 +103,13 @@ Then import project SQL files:
 ```bash
 mysql -u replug_user -p replug_db < database/items_table.sql
 mysql -u replug_user -p replug_db < database/pickups_table.sql
+mysql -u replug_user -p replug_db < database/inspections_table.sql
+mysql -u replug_user -p replug_db < database/marketplace_listings_table.sql
+mysql -u replug_user -p replug_db < database/orders_table.sql
+mysql -u replug_user -p replug_db < database/payouts_table.sql
+mysql -u replug_user -p replug_db < database/audit_logs_table.sql
+mysql -u replug_user -p replug_db < database/email_verifications_table.sql
+mysql -u replug_user -p replug_db < database/password_resets_table.sql
 ```
 
 If needed (older DB without avatar column):

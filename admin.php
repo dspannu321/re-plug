@@ -63,6 +63,15 @@ $marketplaceError = '';
 $payoutMsg = '';
 $payoutError = '';
 
+if ($section === 'pickups' && isset($_GET['pickup_msg'])) $pickupMsg = (string) $_GET['pickup_msg'];
+if ($section === 'pickups' && isset($_GET['pickup_error'])) $pickupError = (string) $_GET['pickup_error'];
+if ($section === 'users' && isset($_GET['user_msg'])) $userMsg = (string) $_GET['user_msg'];
+if ($section === 'users' && isset($_GET['user_error'])) $userError = (string) $_GET['user_error'];
+if ($section === 'marketplace' && isset($_GET['marketplace_msg'])) $marketplaceMsg = (string) $_GET['marketplace_msg'];
+if ($section === 'marketplace' && isset($_GET['marketplace_error'])) $marketplaceError = (string) $_GET['marketplace_error'];
+if ($section === 'marketplace' && isset($_GET['payout_msg'])) $payoutMsg = (string) $_GET['payout_msg'];
+if ($section === 'marketplace' && isset($_GET['payout_error'])) $payoutError = (string) $_GET['payout_error'];
+
 // ---------- Admin Pickups: assign driver ----------
 if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_driver'])) {
     require_valid_csrf();
@@ -87,9 +96,14 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
                 $stmt = $pdo->prepare("UPDATE pickups SET driver_user_id = ?, status = 'scheduled' WHERE id = ?");
                 $stmt->execute([$driverId, $pickupId]);
                 log_audit($pdo, $userId, 'pickup', $pickupId, 'assign_driver', ['driver_user_id' => $driverId, 'status' => 'scheduled']);
-                $pickupMsg = 'Driver assigned.';
+                header('Location: admin.php?section=pickups&pickup_msg=' . urlencode('Driver assigned.'));
+                exit;
             }
         }
+    }
+    if ($pickupError !== '') {
+        header('Location: admin.php?section=pickups&pickup_error=' . urlencode($pickupError));
+        exit;
     }
 }
 
@@ -123,9 +137,14 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
                 $stmt = $pdo->prepare("UPDATE pickups SET status = ? WHERE id = ?");
                 $stmt->execute([$newStatus, $pickupId]);
                 log_audit($pdo, $userId, 'pickup', $pickupId, 'status_update', ['from' => $currentStatus, 'to' => $newStatus]);
-                $pickupMsg = 'Pickup status updated.';
+                header('Location: admin.php?section=pickups&pickup_msg=' . urlencode('Pickup status updated.'));
+                exit;
             }
         }
+    }
+    if ($pickupError !== '') {
+        header('Location: admin.php?section=pickups&pickup_error=' . urlencode($pickupError));
+        exit;
     }
 }
 
@@ -226,10 +245,15 @@ if ($section === 'users' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POS
             $stmt = $pdo->prepare("UPDATE users SET role = ? WHERE id = ?");
             $stmt->execute([$newRole, $targetUserId]);
             log_audit($pdo, $userId, 'user', $targetUserId, 'role_update', ['role' => $newRole]);
-            $userMsg = 'User role updated.';
+            header('Location: admin.php?section=users&user_msg=' . urlencode('User role updated.'));
+            exit;
         } catch (PDOException $e) {
             $userError = 'Could not update role.';
         }
+    }
+    if ($userError !== '') {
+        header('Location: admin.php?section=users&user_error=' . urlencode($userError));
+        exit;
     }
 }
 
@@ -302,7 +326,8 @@ if ($section === 'marketplace' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset
                     $stmt->execute([$itemId]);
                     log_audit($pdo, $userId, 'listing', $listingId, 'create_listing', ['item_id' => $itemId, 'price' => $price]);
                     $pdo->commit();
-                    $marketplaceMsg = 'Marketplace listing created.';
+                    header('Location: admin.php?section=marketplace&marketplace_msg=' . urlencode('Marketplace listing created.'));
+                    exit;
                 }
             }
         } catch (PDOException $e) {
@@ -310,27 +335,50 @@ if ($section === 'marketplace' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset
             $marketplaceError = 'Could not create listing. Make sure marketplace_listings table exists.';
         }
     }
+    if ($marketplaceError !== '') {
+        header('Location: admin.php?section=marketplace&marketplace_error=' . urlencode($marketplaceError));
+        exit;
+    }
 }
 
 // ---------- Admin Payouts: mark payout paid ----------
 if ($section === 'marketplace' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_payout_paid'])) {
     require_valid_csrf();
     $payoutId = (int) ($_POST['payout_id'] ?? 0);
+    $percentRaw = trim((string)($_POST['payout_percent'] ?? ''));
+    $payoutPercent = is_numeric($percentRaw) ? (float) $percentRaw : -1;
     if ($payoutId <= 0) {
         $payoutError = 'Invalid payout.';
+    } elseif ($payoutPercent <= 0 || $payoutPercent > 100) {
+        $payoutError = 'Payout percentage must be between 0.01 and 100.';
     } else {
         try {
-            $stmt = $pdo->prepare("UPDATE payouts SET status = 'paid' WHERE id = ? AND status = 'unpaid'");
+            $stmt = $pdo->prepare("SELECT p.id, o.amount AS order_amount
+                FROM payouts p
+                JOIN orders o ON o.id = p.order_id
+                WHERE p.id = ? AND p.status = 'unpaid'
+                LIMIT 1");
             $stmt->execute([$payoutId]);
-            if ($stmt->rowCount() > 0) {
-                log_audit($pdo, $userId, 'payout', $payoutId, 'mark_paid');
-                $payoutMsg = 'Payout marked as paid.';
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                $amount = round(((float)$row['order_amount']) * ($payoutPercent / 100), 2);
+                $stmt = $pdo->prepare("UPDATE payouts SET amount = ?, status = 'paid' WHERE id = ? AND status = 'unpaid'");
+                $stmt->execute([$amount, $payoutId]);
+                if ($stmt->rowCount() > 0) {
+                    log_audit($pdo, $userId, 'payout', $payoutId, 'mark_paid', ['percent' => $payoutPercent, 'amount' => $amount]);
+                    header('Location: admin.php?section=marketplace&payout_msg=' . urlencode('Payout marked as paid.'));
+                    exit;
+                }
             } else {
                 $payoutError = 'Payout not found or already paid.';
             }
         } catch (PDOException $e) {
             $payoutError = 'Could not update payout. Make sure payouts table exists.';
         }
+    }
+    if ($payoutError !== '') {
+        header('Location: admin.php?section=marketplace&payout_error=' . urlencode($payoutError));
+        exit;
     }
 }
 
@@ -387,6 +435,7 @@ try {
 
 // ---------- Profile: avatar upload ----------
 if ($section === 'profile' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['profile_avatar'])) {
+    require_valid_csrf();
     if (!is_dir($avatarsDir)) {
         @mkdir($avatarsDir, 0755, true);
     }
@@ -419,6 +468,7 @@ if ($section === 'profile' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
 
 // ---------- Profile: change password ----------
 if ($section === 'profile' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['profile_password'])) {
+    require_valid_csrf();
     $current = $_POST['current_password'] ?? '';
     $new = $_POST['new_password'] ?? '';
     $confirm = $_POST['new_password_confirm'] ?? '';
@@ -638,9 +688,46 @@ if (!empty($user['avatar'])) {
         .status-approved_for_sale, .status-listed_for_sale { background: #E8F5E9; color: #2E7D32; }
         .status-sold { background: #E8F5E9; color: #1B5E20; }
         .status-recycled { background: #F1F8E9; color: #33691E; }
-        .pickup-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .pickup-actions {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.5rem;
+            min-width: 220px;
+        }
+        .pickup-action-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .pickup-action-label {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            color: #5F6C7B;
+            text-transform: uppercase;
+            margin-right: 0.25rem;
+        }
         .pickup-actions form { margin: 0; }
-        .pickup-actions select { min-width: 130px; padding: 8px 10px; font-size: 13px; border-radius: 8px; border: 1px solid #E5E7EB; }
+        .pickup-actions select {
+            min-width: 136px;
+            max-width: 170px;
+            padding: 8px 10px;
+            font-size: 13px;
+            border-radius: 8px;
+            border: 1px solid #E5E7EB;
+            background: #fff;
+        }
+        .pickup-actions .btn-secondary {
+            padding: 7px 10px;
+            font-size: 12px;
+        }
+        .data-table td.actions-cell {
+            background: #FAFBFC;
+            border-left: 1px solid #F0F2F5;
+        }
         .small-note { color: #5F6C7B; font-size: 12px; }
         .pickup-detail-back { display: inline-block; margin-bottom: 1rem; font-size: 14px; font-weight: 500; }
         .pickup-detail-meta { font-size: 14px; color: #1F2933; line-height: 1.6; margin-bottom: 1.25rem; }
@@ -856,43 +943,52 @@ if (!empty($user['avatar'])) {
                                             <td><?php echo (int) $pu['item_count']; ?></td>
                                             <td><span class="status-badge status-<?php echo htmlspecialchars($pu['status']); ?>"><?php echo htmlspecialchars(pickup_status_label($pu['status'])); ?></span></td>
                                             <td><?php echo htmlspecialchars(mb_strimwidth((string) $pu['address_text'], 0, 70, '...')); ?></td>
-                                            <td>
+                                            <td class="actions-cell">
                                                 <div class="pickup-actions">
-                                                    <a href="admin.php?section=pickups&amp;view=<?php echo (int) $pu['id']; ?>" class="btn-secondary">View</a>
+                                                    <div class="pickup-action-row">
+                                                        <span class="pickup-action-label">Details</span>
+                                                        <a href="admin.php?section=pickups&amp;view=<?php echo (int) $pu['id']; ?>" class="btn-secondary">View</a>
+                                                    </div>
                                                     <?php if (in_array($pu['status'], ['requested', 'scheduled'], true)): ?>
-                                                        <form method="post" action="admin.php?section=pickups">
-                                                            <?php echo csrf_field(); ?>
-                                                            <input type="hidden" name="assign_driver" value="1">
-                                                            <input type="hidden" name="pickup_id" value="<?php echo (int) $pu['id']; ?>">
-                                                            <select name="driver_user_id" required>
-                                                                <option value="">Assign driver</option>
-                                                                <?php foreach ($drivers as $dr): ?>
-                                                                    <option value="<?php echo (int) $dr['id']; ?>" <?php echo ((int)$pu['driver_user_id'] === (int)$dr['id']) ? 'selected' : ''; ?>>
-                                                                        <?php echo htmlspecialchars($dr['name']); ?>
-                                                                    </option>
-                                                                <?php endforeach; ?>
-                                                            </select>
-                                                            <button type="submit" class="btn-secondary">Save</button>
-                                                        </form>
+                                                        <div class="pickup-action-row">
+                                                            <span class="pickup-action-label">Driver</span>
+                                                            <form method="post" action="admin.php?section=pickups">
+                                                                <?php echo csrf_field(); ?>
+                                                                <input type="hidden" name="assign_driver" value="1">
+                                                                <input type="hidden" name="pickup_id" value="<?php echo (int) $pu['id']; ?>">
+                                                                <select name="driver_user_id" required>
+                                                                    <option value="">Assign driver</option>
+                                                                    <?php foreach ($drivers as $dr): ?>
+                                                                        <option value="<?php echo (int) $dr['id']; ?>" <?php echo ((int)$pu['driver_user_id'] === (int)$dr['id']) ? 'selected' : ''; ?>>
+                                                                            <?php echo htmlspecialchars($dr['name']); ?>
+                                                                        </option>
+                                                                    <?php endforeach; ?>
+                                                                </select>
+                                                                <button type="submit" class="btn-secondary">Save</button>
+                                                            </form>
+                                                        </div>
                                                     <?php endif; ?>
                                                     <?php if (in_array($pu['status'], ['requested', 'scheduled'], true)): ?>
-                                                        <form method="post" action="admin.php?section=pickups">
-                                                            <?php echo csrf_field(); ?>
-                                                            <input type="hidden" name="update_pickup_status" value="1">
-                                                            <input type="hidden" name="pickup_id" value="<?php echo (int) $pu['id']; ?>">
-                                                            <select name="status" required>
-                                                                <option value="">Set status</option>
-                                                                <?php if ($pu['status'] === 'requested'): ?>
-                                                                    <option value="scheduled">Scheduled</option>
-                                                                <?php endif; ?>
-                                                                <?php if ($pu['status'] === 'scheduled'): ?>
-                                                                    <option value="picked_up">Picked up</option>
-                                                                <?php endif; ?>
-                                                                <option value="failed">Failed</option>
-                                                                <option value="cancelled">Cancelled</option>
-                                                            </select>
-                                                            <button type="submit" class="btn-secondary">Update</button>
-                                                        </form>
+                                                        <div class="pickup-action-row">
+                                                            <span class="pickup-action-label">Status</span>
+                                                            <form method="post" action="admin.php?section=pickups">
+                                                                <?php echo csrf_field(); ?>
+                                                                <input type="hidden" name="update_pickup_status" value="1">
+                                                                <input type="hidden" name="pickup_id" value="<?php echo (int) $pu['id']; ?>">
+                                                                <select name="status" required>
+                                                                    <option value="">Set status</option>
+                                                                    <?php if ($pu['status'] === 'requested'): ?>
+                                                                        <option value="scheduled">Scheduled</option>
+                                                                    <?php endif; ?>
+                                                                    <?php if ($pu['status'] === 'scheduled'): ?>
+                                                                        <option value="picked_up">Picked up</option>
+                                                                    <?php endif; ?>
+                                                                    <option value="failed">Failed</option>
+                                                                    <option value="cancelled">Cancelled</option>
+                                                                </select>
+                                                                <button type="submit" class="btn-secondary">Update</button>
+                                                            </form>
+                                                        </div>
                                                     <?php endif; ?>
                                                 </div>
                                             </td>
@@ -1023,7 +1119,7 @@ if (!empty($user['avatar'])) {
                                         <tr>
                                             <td>#<?php echo (int) $ml['id']; ?> — <?php echo htmlspecialchars($ml['title']); ?></td>
                                             <td>#<?php echo (int) $ml['item_id']; ?></td>
-                                            <td>PHP <?php echo number_format((float) $ml['price'], 2); ?></td>
+                                            <td>$<?php echo number_format((float) $ml['price'], 2); ?></td>
                                             <td>
                                                 <span class="status-badge status-<?php echo $ml['is_active'] ? 'scheduled' : 'cancelled'; ?>">
                                                     <?php echo $ml['is_active'] ? 'Active' : 'Inactive'; ?>
@@ -1050,7 +1146,7 @@ if (!empty($user['avatar'])) {
 
                 <div class="card">
                     <h2>Payouts</h2>
-                    <p class="small-note" style="margin-bottom: 0.75rem;">Recycler share is calculated at <?php echo number_format(RECYCLER_SHARE_PERCENT, 2); ?>% of paid order amount.</p>
+                    <p class="small-note" style="margin-bottom: 0.75rem;">Set payout percentage before marking paid (default: <?php echo number_format(RECYCLER_SHARE_PERCENT, 2); ?>%).</p>
                     <?php if ($payoutMsg): ?><p class="msg success"><?php echo htmlspecialchars($payoutMsg); ?></p><?php endif; ?>
                     <?php if ($payoutError): ?><p class="msg error"><?php echo htmlspecialchars($payoutError); ?></p><?php endif; ?>
                     <?php if (count($payouts) === 0): ?>
@@ -1075,8 +1171,8 @@ if (!empty($user['avatar'])) {
                                             <td>#<?php echo (int) $po['id']; ?></td>
                                             <td><?php echo htmlspecialchars($po['recycler_name']); ?></td>
                                             <td>#<?php echo (int) $po['order_id']; ?></td>
-                                            <td>PHP <?php echo number_format((float) $po['order_amount'], 2); ?></td>
-                                            <td>PHP <?php echo number_format((float) $po['amount'], 2); ?></td>
+                                            <td>$<?php echo number_format((float) $po['order_amount'], 2); ?></td>
+                                            <td>$<?php echo number_format((float) $po['amount'], 2); ?></td>
                                             <td>
                                                 <span class="status-badge status-<?php echo $po['status'] === 'paid' ? 'picked_up' : 'requested'; ?>">
                                                     <?php echo htmlspecialchars(ucfirst((string) $po['status'])); ?>
@@ -1088,6 +1184,7 @@ if (!empty($user['avatar'])) {
                                                         <?php echo csrf_field(); ?>
                                                         <input type="hidden" name="mark_payout_paid" value="1">
                                                         <input type="hidden" name="payout_id" value="<?php echo (int) $po['id']; ?>">
+                                                        <input type="number" name="payout_percent" step="0.01" min="0.01" max="100" value="<?php echo number_format(RECYCLER_SHARE_PERCENT, 2, '.', ''); ?>" required style="width:88px; margin-right:6px;">
                                                         <button type="submit" class="btn-secondary">Mark paid</button>
                                                     </form>
                                                 <?php else: ?>

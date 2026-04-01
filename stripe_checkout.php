@@ -60,7 +60,7 @@ try {
         'line_items' => [[
             'quantity' => 1,
             'price_data' => [
-                'currency' => 'php',
+                'currency' => 'cad',
                 'unit_amount' => (int) round(((float)$listing['price']) * 100),
                 'product_data' => [
                     'name' => (string)$listing['title'],

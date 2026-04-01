@@ -75,6 +75,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['inspect_item'])) {
         } catch (PDOException $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             $error = 'Could not save inspection. Make sure inspections table exists.';
+            if (defined('APP_ENV') && APP_ENV === 'local') {
+                $error .= ' DB error: ' . $e->getMessage();
+            }
         }
     }
 }
@@ -191,6 +194,7 @@ function item_status_label_tech($status) {
                         <?php if (!empty($it['condition_notes'])): ?><p class="small" style="margin-top:.25rem;">Condition notes: <?php echo htmlspecialchars($it['condition_notes']); ?></p><?php endif; ?>
 
                         <form method="post" action="technician.php" style="margin-top:.75rem;">
+                            <?php echo csrf_field(); ?>
                             <input type="hidden" name="inspect_item" value="1">
                             <input type="hidden" name="item_id" value="<?php echo (int)$it['id']; ?>">
                             <div class="row">
@@ -252,7 +256,7 @@ function item_status_label_tech($status) {
                                     <td><?php echo htmlspecialchars($ri['title'] ?: ('Item #' . (int)$ri['item_id'])); ?></td>
                                     <td><?php echo htmlspecialchars(ucwords(str_replace('_', ' ', (string)$ri['result']))); ?></td>
                                     <td><span class="badge"><?php echo htmlspecialchars(item_status_label_tech($ri['status_after'])); ?></span></td>
-                                    <td><?php echo $ri['estimated_repair_cost'] !== null ? ('PHP ' . number_format((float)$ri['estimated_repair_cost'], 2)) : '-'; ?></td>
+                                    <td><?php echo $ri['estimated_repair_cost'] !== null ? ('$' . number_format((float)$ri['estimated_repair_cost'], 2)) : '-'; ?></td>
                                     <td><?php echo !empty($ri['created_at']) ? date('M j, Y g:i A', strtotime($ri['created_at'])) : '-'; ?></td>
                                 </tr>
                             <?php endforeach; ?>

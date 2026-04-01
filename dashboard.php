@@ -41,6 +41,20 @@ function pickup_status_label($status) {
     return $labels[$status] ?? ucfirst(str_replace('_', ' ', (string) $status));
 }
 
+function compose_pickup_address(array $src): string {
+    $street = trim((string)($src['address_street'] ?? ''));
+    $city = trim((string)($src['address_city'] ?? ''));
+    $province = trim((string)($src['address_province'] ?? ''));
+    $postal = trim((string)($src['address_postal'] ?? ''));
+    $parts = array_values(array_filter([$street, $city, $province, $postal], function ($v) {
+        return $v !== '';
+    }));
+    if (!empty($parts)) {
+        return implode(', ', $parts);
+    }
+    return trim((string)($src['address_text'] ?? ''));
+}
+
 $userId = (int) $_SESSION['user']['id'];
 $user = $_SESSION['user'];
 
@@ -70,6 +84,8 @@ $listingError = '';
 $listingSuccess = '';
 $pickupError = '';
 $pickupSuccess = '';
+$pickupMinStartTs = strtotime('tomorrow 00:00:00');
+$pickupMinStartInput = date('Y-m-d\TH:i', $pickupMinStartTs);
 if ($section === 'listings' && isset($_GET['msg'])) {
     if ($_GET['msg'] === 'updated') $listingSuccess = 'Listing updated.';
     if ($_GET['msg'] === 'deleted') $listingSuccess = 'Listing deleted.';
@@ -77,6 +93,7 @@ if ($section === 'listings' && isset($_GET['msg'])) {
 if ($section === 'pickups' && isset($_GET['msg'])) {
     if ($_GET['msg'] === 'updated') $pickupSuccess = 'Pickup updated.';
     if ($_GET['msg'] === 'cancelled') $pickupSuccess = 'Pickup cancelled.';
+    if ($_GET['msg'] === 'requested') $pickupSuccess = 'Pickup requested. We will assign a driver and confirm the schedule.';
 }
 
 // Ensure upload dirs exist
@@ -259,7 +276,7 @@ try {
 if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_pickup'])) {
     require_valid_csrf();
     $itemIds = isset($_POST['item_ids']) && is_array($_POST['item_ids']) ? array_map('intval', $_POST['item_ids']) : [];
-    $address = trim($_POST['address_text'] ?? '');
+    $address = compose_pickup_address($_POST);
     $windowStart = trim($_POST['pickup_window_start'] ?? '');
     $windowEnd = trim($_POST['pickup_window_end'] ?? '');
     if (empty($itemIds)) {
@@ -268,6 +285,8 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
         $pickupError = 'Please enter the pickup address.';
     } elseif ($windowStart === '' || $windowEnd === '') {
         $pickupError = 'Please select pickup window start and end.';
+    } elseif (strtotime($windowStart) < $pickupMinStartTs) {
+        $pickupError = 'Pickup start must be tomorrow or later.';
     } elseif (strtotime($windowEnd) <= strtotime($windowStart)) {
         $pickupError = 'Window end must be after window start.';
     } else {
@@ -297,7 +316,8 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
                 $stmt->execute([$itemId, $userId]);
             }
             $pdo->commit();
-            $pickupSuccess = 'Pickup requested. We will assign a driver and confirm the schedule.';
+            header('Location: dashboard.php?section=pickups&msg=requested');
+            exit;
         } catch (PDOException $e) {
             $pdo->rollBack();
             $pickupError = 'Could not create pickup. Make sure the pickups table exists.';
@@ -314,12 +334,25 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
         $stmt = $pdo->prepare("SELECT id, status FROM pickups WHERE id = ? AND recycler_user_id = ?");
         $stmt->execute([$pickupId, $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($row && in_array($row['status'], ['requested', 'scheduled'], true)) {
-            $address = trim($_POST['address_text'] ?? '');
+        if ($row && $row['status'] === 'requested') {
+            $stmt = $pdo->prepare("SELECT i.status FROM pickup_items pi JOIN items i ON i.id = pi.item_id WHERE pi.pickup_id = ?");
+            $stmt->execute([$pickupId]);
+            $linkedStatuses = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'status');
+            $lockedByProcessing = false;
+            foreach ($linkedStatuses as $st) {
+                if (!in_array((string) $st, ['draft', 'pickup_requested'], true)) {
+                    $lockedByProcessing = true;
+                    break;
+                }
+            }
+            if ($lockedByProcessing) {
+                $pickupError = 'This pickup can no longer be edited because item processing has already started.';
+            } else {
+            $address = compose_pickup_address($_POST);
             $windowStart = trim($_POST['pickup_window_start'] ?? '');
             $windowEnd = trim($_POST['pickup_window_end'] ?? '');
             $itemIds = isset($_POST['item_ids']) && is_array($_POST['item_ids']) ? array_map('intval', array_filter($_POST['item_ids'])) : [];
-            if ($address !== '' && $windowStart !== '' && $windowEnd !== '' && strtotime($windowEnd) > strtotime($windowStart)) {
+            if ($address !== '' && $windowStart !== '' && $windowEnd !== '' && strtotime($windowStart) >= $pickupMinStartTs && strtotime($windowEnd) > strtotime($windowStart)) {
                 if (empty($itemIds)) {
                     $pickupError = 'Select at least one item for the pickup.';
                 } else {
@@ -366,7 +399,8 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
                     }
                 }
             } else {
-                $pickupError = 'Please fill address and a valid time window.';
+                $pickupError = 'Please fill address and a valid time window (tomorrow or later).';
+            }
             }
         }
     }
@@ -380,7 +414,20 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
         $stmt = $pdo->prepare("SELECT id, status FROM pickups WHERE id = ? AND recycler_user_id = ?");
         $stmt->execute([$pickupId, $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($row && $row['status'] !== 'picked_up') {
+        if ($row && $row['status'] === 'requested') {
+            $stmt = $pdo->prepare("SELECT i.status FROM pickup_items pi JOIN items i ON i.id = pi.item_id WHERE pi.pickup_id = ?");
+            $stmt->execute([$pickupId]);
+            $linkedStatuses = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'status');
+            $lockedByProcessing = false;
+            foreach ($linkedStatuses as $st) {
+                if (!in_array((string) $st, ['draft', 'pickup_requested'], true)) {
+                    $lockedByProcessing = true;
+                    break;
+                }
+            }
+            if ($lockedByProcessing) {
+                $pickupError = 'This pickup can no longer be cancelled because item processing has already started.';
+            } else {
             $stmt = $pdo->prepare("SELECT item_id FROM pickup_items WHERE pickup_id = ?");
             $stmt->execute([$pickupId]);
             $itemIds = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'item_id');
@@ -391,6 +438,7 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
             }
             header('Location: dashboard.php?section=pickups&msg=cancelled');
             exit;
+            }
         }
     }
 }
@@ -398,6 +446,9 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
 // Fetch user's pickups (with item count and item titles)
 $pickups = [];
 $pickupItemTitles = [];
+$pickupItemStatuses = [];
+$pickupItemDetails = [];
+$myPayouts = [];
 try {
     $stmt = $pdo->prepare("SELECT p.id, p.pickup_window_start, p.pickup_window_end, p.address_text, p.status, p.created_at,
         (SELECT COUNT(*) FROM pickup_items WHERE pickup_id = p.id) AS item_count
@@ -408,33 +459,96 @@ try {
     $pickupItemIds = [];
     if (!empty($pickupIds)) {
         $placeholders = implode(',', array_fill(0, count($pickupIds), '?'));
-        $stmt = $pdo->prepare("SELECT pi.pickup_id, pi.item_id, i.title FROM pickup_items pi JOIN items i ON i.id = pi.item_id WHERE pi.pickup_id IN ($placeholders)");
+        $stmt = $pdo->prepare("SELECT
+                pi.pickup_id,
+                pi.item_id,
+                i.title,
+                i.status,
+                (
+                    SELECT ins.notes
+                    FROM inspections ins
+                    WHERE ins.item_id = i.id
+                    ORDER BY ins.created_at DESC, ins.id DESC
+                    LIMIT 1
+                ) AS latest_inspection_notes,
+                (
+                    SELECT ins.result
+                    FROM inspections ins
+                    WHERE ins.item_id = i.id
+                    ORDER BY ins.created_at DESC, ins.id DESC
+                    LIMIT 1
+                ) AS latest_inspection_result
+            FROM pickup_items pi
+            JOIN items i ON i.id = pi.item_id
+            WHERE pi.pickup_id IN ($placeholders)");
         $stmt->execute($pickupIds);
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $pickupItemTitles[$row['pickup_id']][] = $row['title'];
             $pickupItemIds[$row['pickup_id']][] = (int) $row['item_id'];
+            $pickupItemStatuses[$row['pickup_id']][] = (string) ($row['status'] ?? '');
+            $pickupItemDetails[$row['pickup_id']][] = [
+                'id' => (int) ($row['item_id'] ?? 0),
+                'title' => (string) ($row['title'] ?? ''),
+                'status' => (string) ($row['status'] ?? ''),
+                'inspection_result' => (string) ($row['latest_inspection_result'] ?? ''),
+                'inspection_notes' => (string) ($row['latest_inspection_notes'] ?? ''),
+            ];
         }
     }
 } catch (PDOException $e) {
     // pickups table may not exist
 }
+try {
+    $stmt = $pdo->prepare("SELECT p.id, p.order_id, p.amount, p.status, p.created_at, o.amount AS order_amount
+        FROM payouts p
+        JOIN orders o ON o.id = p.order_id
+        WHERE p.recycler_user_id = ?
+        ORDER BY p.created_at DESC, p.id DESC");
+    $stmt->execute([$userId]);
+    $myPayouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    // payouts/orders may not exist yet
+}
+// Block items already linked to any non-cancelled pickup.
+$blockedByActivePickup = [];
+foreach ($pickups as $p) {
+    if (($p['status'] ?? '') === 'cancelled') {
+        continue;
+    }
+    foreach (($pickupItemIds[$p['id']] ?? []) as $iid) {
+        $blockedByActivePickup[(int) $iid] = true;
+    }
+}
+
 foreach ($pickups as &$pu) {
     $pu['item_titles'] = $pickupItemTitles[$pu['id']] ?? [];
     $pu['item_ids'] = $pickupItemIds[$pu['id']] ?? [];
+    $pu['item_details'] = $pickupItemDetails[$pu['id']] ?? [];
     $pu['available_items'] = [];
     foreach ($items as $it) {
         $inThisPickup = in_array((int)$it['id'], $pu['item_ids'], true);
         $isDraft = ($it['status'] ?? '') === 'draft';
-        if ($inThisPickup || $isDraft) {
+        $isBlockedElsewhere = !empty($blockedByActivePickup[(int)$it['id']]) && !$inThisPickup;
+        if ($inThisPickup || ($isDraft && !$isBlockedElsewhere)) {
             $pu['available_items'][] = ['id' => (int)$it['id'], 'title' => $it['title'], 'category' => $it['category'] ?? ''];
         }
     }
+    $isBaseEditable = (($pu['status'] ?? '') === 'requested');
+    $hasProcessingStarted = false;
+    foreach (($pickupItemStatuses[$pu['id']] ?? []) as $st) {
+        if (!in_array($st, ['draft', 'pickup_requested'], true)) {
+            $hasProcessingStarted = true;
+            break;
+        }
+    }
+    $pu['can_edit'] = $isBaseEditable && !$hasProcessingStarted;
 }
 unset($pu);
 
 // Draft items only (for request pickup form) — items not yet in a requested/scheduled pickup
-$draftItems = array_filter($items, function ($i) {
-    return ($i['status'] ?? '') === 'draft';
+$draftItems = array_filter($items, function ($i) use ($blockedByActivePickup) {
+    $iid = (int) ($i['id'] ?? 0);
+    return ($i['status'] ?? '') === 'draft' && empty($blockedByActivePickup[$iid]);
 });
 
 $avatarUrl = null;
@@ -752,6 +866,41 @@ if (!empty($user['avatar'])) {
         .pickup-card .status-scheduled { background: #E3F2FD; color: #1565C0; }
         .pickup-card .status-picked_up { background: #E8F5EE; color: #2FAE66; }
         .pickup-card .status-failed, .pickup-card .status-cancelled { background: #FFEBEE; color: #5F6C7B; }
+        .table-wrap {
+            overflow-x: auto;
+            background: #FFFFFF;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(31,41,51,0.06);
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .data-table th,
+        .data-table td {
+            border-bottom: 1px solid #F0F2F5;
+            padding: 10px 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+        .data-table th {
+            color: #5F6C7B;
+            font-weight: 600;
+            font-size: 12px;
+            letter-spacing: 0.01em;
+            text-transform: uppercase;
+            background: #FAFBFC;
+        }
+        .status-badge {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .status-requested { background: #E3F2FD; color: #1E88E5; }
+        .status-picked_up { background: #E8F5EE; color: #2FAE66; }
         .pickup-cards-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -803,6 +952,8 @@ if (!empty($user['avatar'])) {
         .pickup-modal__view-items { margin: 0.25rem 0 0; padding-left: 1.25rem; }
         .pickup-modal__view-items li { margin-bottom: 0.25rem; }
         .pickup-modal__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid #E5E7EB; }
+        .pickup-modal__btn-edit { display: none; }
+        .pickup-modal__btn-edit.is-visible { display: inline-block; }
         .pickup-modal__btn-cancel { display: none; }
         .pickup-modal__btn-cancel.is-visible { display: inline-block; }
         .pickup-modal__cancel-note { margin-bottom: 1rem; padding: 1rem; background: #FFEBEE; border-radius: 8px; font-size: 14px; color: #5F6C7B; }
@@ -938,6 +1089,8 @@ if (!empty($user['avatar'])) {
             padding-top: 1.25rem;
             border-top: 1px solid #E5E7EB;
         }
+        .item-modal__btn-edit { display: none; }
+        .item-modal__btn-edit.is-visible { display: inline-block; }
         .item-modal__btn-delete { display: none; }
         .item-modal__btn-delete.is-visible { display: inline-block; }
         .item-modal__btn-request-pickup { display: none; }
@@ -1168,8 +1321,9 @@ if (!empty($user['avatar'])) {
                                 'item_count' => (int)$pu['item_count'],
                                 'item_titles' => $pu['item_titles'],
                                 'item_ids' => $pu['item_ids'],
+                                'item_details' => $pu['item_details'],
                                 'available_items' => $pu['available_items'],
-                                'can_edit' => in_array($pu['status'], ['requested', 'scheduled'], true),
+                                'can_edit' => !empty($pu['can_edit']),
                             ];
                         ?>
                             <div class="pickup-card pickup-card-clickable" role="button" tabindex="0" data-pickup="<?php echo htmlspecialchars(json_encode($pickupData), ENT_QUOTES, 'UTF-8'); ?>">
@@ -1206,21 +1360,69 @@ if (!empty($user['avatar'])) {
                                 <?php endforeach; ?>
                             </div>
                             <div class="form-group">
-                                <label for="address_text">Pickup address *</label>
-                                <textarea id="address_text" name="address_text" rows="3" required placeholder="Street, city, province, postal code"><?php echo htmlspecialchars($_POST['address_text'] ?? ''); ?></textarea>
+                                <label for="address_street">Street address *</label>
+                                <input type="text" id="address_street" name="address_street" required placeholder="Street and unit" value="<?php echo htmlspecialchars($_POST['address_street'] ?? ''); ?>">
+                            </div>
+                            <div class="pickup-form-row">
+                                <div class="form-group">
+                                    <label for="address_city">City *</label>
+                                    <input type="text" id="address_city" name="address_city" required value="<?php echo htmlspecialchars($_POST['address_city'] ?? ''); ?>">
+                                </div>
+                                <div class="form-group">
+                                    <label for="address_province">Province/State *</label>
+                                    <input type="text" id="address_province" name="address_province" required value="<?php echo htmlspecialchars($_POST['address_province'] ?? ''); ?>">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="address_postal">Postal code *</label>
+                                <input type="text" id="address_postal" name="address_postal" required value="<?php echo htmlspecialchars($_POST['address_postal'] ?? ''); ?>">
                             </div>
                             <div class="pickup-form-row">
                                 <div class="form-group">
                                     <label for="pickup_window_start">Window start *</label>
-                                    <input type="datetime-local" id="pickup_window_start" name="pickup_window_start" required value="<?php echo htmlspecialchars($_POST['pickup_window_start'] ?? ''); ?>">
+                                    <input type="datetime-local" id="pickup_window_start" name="pickup_window_start" required min="<?php echo htmlspecialchars($pickupMinStartInput); ?>" value="<?php echo htmlspecialchars($_POST['pickup_window_start'] ?? ''); ?>">
                                 </div>
                                 <div class="form-group">
                                     <label for="pickup_window_end">Window end *</label>
-                                    <input type="datetime-local" id="pickup_window_end" name="pickup_window_end" required value="<?php echo htmlspecialchars($_POST['pickup_window_end'] ?? ''); ?>">
+                                    <input type="datetime-local" id="pickup_window_end" name="pickup_window_end" required min="<?php echo htmlspecialchars($pickupMinStartInput); ?>" value="<?php echo htmlspecialchars($_POST['pickup_window_end'] ?? ''); ?>">
                                 </div>
                             </div>
                             <button type="submit" class="btn-primary">Request pickup</button>
                         </form>
+                    <?php endif; ?>
+                </div>
+
+                <div class="card" style="margin-top: 1.5rem;">
+                    <h2>My payouts</h2>
+                    <?php if (count($myPayouts) === 0): ?>
+                        <p class="placeholder-desc">No payout records yet.</p>
+                    <?php else: ?>
+                        <div class="table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Payout</th>
+                                        <th>Order</th>
+                                        <th>Order amount</th>
+                                        <th>Payout amount</th>
+                                        <th>Status</th>
+                                        <th>Created</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($myPayouts as $po): ?>
+                                        <tr>
+                                            <td>#<?php echo (int) $po['id']; ?></td>
+                                            <td>#<?php echo (int) $po['order_id']; ?></td>
+                                            <td>$<?php echo number_format((float) ($po['order_amount'] ?? 0), 2); ?></td>
+                                            <td>$<?php echo number_format((float) ($po['amount'] ?? 0), 2); ?></td>
+                                            <td><span class="status-badge status-<?php echo ($po['status'] ?? '') === 'paid' ? 'picked_up' : 'requested'; ?>"><?php echo htmlspecialchars(ucfirst((string) ($po['status'] ?? 'unpaid'))); ?></span></td>
+                                            <td><?php echo !empty($po['created_at']) ? date('M j, Y g:i A', strtotime($po['created_at'])) : '-'; ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     <?php endif; ?>
                 </div>
             <?php endif; ?>
@@ -1238,7 +1440,7 @@ if (!empty($user['avatar'])) {
                 <div class="item-modal__panel is-active" id="item-modal-panel-view">
                     <div id="item-modal-view-content"></div>
                     <div class="item-modal__actions">
-                        <button type="button" class="btn-primary" id="item-modal-btn-edit">Edit</button>
+                        <button type="button" class="btn-primary item-modal__btn-edit" id="item-modal-btn-edit">Edit</button>
                         <button type="button" class="btn-secondary item-modal__btn-request-pickup" id="item-modal-btn-request-pickup">Request pickup</button>
                         <button type="button" class="btn-danger item-modal__btn-delete" id="item-modal-btn-delete">Delete</button>
                     </div>
@@ -1299,12 +1501,13 @@ if (!empty($user['avatar'])) {
                 <div class="pickup-modal__panel is-active" id="pickup-modal-panel-view">
                     <div id="pickup-modal-view-content"></div>
                     <div class="pickup-modal__actions">
-                        <button type="button" class="btn-primary" id="pickup-modal-btn-edit">Edit</button>
+                        <button type="button" class="btn-primary pickup-modal__btn-edit" id="pickup-modal-btn-edit">Edit</button>
                         <button type="button" class="btn-danger pickup-modal__btn-cancel" id="pickup-modal-btn-cancel">Cancel pickup</button>
                     </div>
                 </div>
                 <div class="pickup-modal__panel" id="pickup-modal-panel-edit">
                     <form id="pickup-edit-form" class="pickup-modal__edit-form" method="post" action="dashboard.php?section=pickups">
+                        <?php echo csrf_field(); ?>
                         <input type="hidden" name="edit_pickup" value="1">
                         <input type="hidden" name="pickup_id" id="pickup-edit-id" value="">
                         <div class="pickup-modal__form-section">
@@ -1315,8 +1518,22 @@ if (!empty($user['avatar'])) {
                         <div class="pickup-modal__form-section">
                             <div class="pickup-modal__form-section-title">Address</div>
                             <div class="form-group">
-                                <label for="pickup-edit-address">Pickup address *</label>
-                                <textarea id="pickup-edit-address" name="address_text" rows="3" required placeholder="Street, city, province, postal code"></textarea>
+                                <label for="pickup-edit-address-street">Street address *</label>
+                                <input type="text" id="pickup-edit-address-street" name="address_street" required placeholder="Street and unit">
+                            </div>
+                            <div class="pickup-form-row">
+                                <div class="form-group">
+                                    <label for="pickup-edit-address-city">City *</label>
+                                    <input type="text" id="pickup-edit-address-city" name="address_city" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="pickup-edit-address-province">Province/State *</label>
+                                    <input type="text" id="pickup-edit-address-province" name="address_province" required>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="pickup-edit-address-postal">Postal code *</label>
+                                <input type="text" id="pickup-edit-address-postal" name="address_postal" required>
                             </div>
                         </div>
                         <div class="pickup-modal__form-section">
@@ -1324,11 +1541,11 @@ if (!empty($user['avatar'])) {
                             <div class="pickup-form-row">
                                 <div class="form-group">
                                     <label for="pickup-edit-window-start">Start *</label>
-                                    <input type="datetime-local" id="pickup-edit-window-start" name="pickup_window_start" required>
+                                    <input type="datetime-local" id="pickup-edit-window-start" name="pickup_window_start" required min="<?php echo htmlspecialchars($pickupMinStartInput); ?>">
                                 </div>
                                 <div class="form-group">
                                     <label for="pickup-edit-window-end">End *</label>
-                                    <input type="datetime-local" id="pickup-edit-window-end" name="pickup_window_end" required>
+                                    <input type="datetime-local" id="pickup-edit-window-end" name="pickup_window_end" required min="<?php echo htmlspecialchars($pickupMinStartInput); ?>">
                                 </div>
                             </div>
                         </div>
@@ -1341,6 +1558,7 @@ if (!empty($user['avatar'])) {
                 <div class="pickup-modal__panel" id="pickup-modal-panel-cancel">
                     <p class="pickup-modal__cancel-note">This will cancel the pickup. You can request a new one later.</p>
                     <form id="pickup-cancel-form" method="post" action="dashboard.php?section=pickups">
+                        <?php echo csrf_field(); ?>
                         <input type="hidden" name="cancel_pickup" value="1">
                         <input type="hidden" name="pickup_id" id="pickup-cancel-id" value="">
                         <div class="pickup-modal__actions">
@@ -1363,15 +1581,32 @@ if (!empty($user['avatar'])) {
             <div class="create-pickup-modal__body">
                 <div id="create-pickup-no-drafts" class="create-pickup-modal__no-drafts" style="display: none;">You have no draft items. Add items in My listings first.</div>
                 <form id="create-pickup-form" method="post" action="dashboard.php?section=pickups" style="display: none;">
+                    <?php echo csrf_field(); ?>
                     <input type="hidden" name="request_pickup" value="1">
                     <div class="create-pickup-modal__form-section">
                         <div class="create-pickup-modal__form-section-title">Select items to pick up</div>
                         <div id="create-pickup-items-container"></div>
                     </div>
                     <div class="create-pickup-modal__form-section">
-                        <div class="create-pickup-modal__form-section-title">Pickup address *</div>
+                        <div class="create-pickup-modal__form-section-title">Street address *</div>
                         <div class="form-group">
-                            <textarea id="create-pickup-address" name="address_text" rows="3" required placeholder="Street, city, province, postal code"></textarea>
+                            <input type="text" id="create-pickup-address-street" name="address_street" required placeholder="Street and unit">
+                        </div>
+                    </div>
+                    <div class="pickup-form-row">
+                        <div class="form-group">
+                            <label for="create-pickup-address-city">City *</label>
+                            <input type="text" id="create-pickup-address-city" name="address_city" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="create-pickup-address-province">Province/State *</label>
+                            <input type="text" id="create-pickup-address-province" name="address_province" required>
+                        </div>
+                    </div>
+                    <div class="create-pickup-modal__form-section">
+                        <div class="create-pickup-modal__form-section-title">Postal code *</div>
+                        <div class="form-group">
+                            <input type="text" id="create-pickup-address-postal" name="address_postal" required>
                         </div>
                     </div>
                     <div class="create-pickup-modal__form-section">
@@ -1379,11 +1614,11 @@ if (!empty($user['avatar'])) {
                         <div class="pickup-form-row">
                             <div class="form-group">
                                 <label for="create-pickup-window-start">Start *</label>
-                                <input type="datetime-local" id="create-pickup-window-start" name="pickup_window_start" required>
+                                <input type="datetime-local" id="create-pickup-window-start" name="pickup_window_start" required min="<?php echo htmlspecialchars($pickupMinStartInput); ?>">
                             </div>
                             <div class="form-group">
                                 <label for="create-pickup-window-end">End *</label>
-                                <input type="datetime-local" id="create-pickup-window-end" name="pickup_window_end" required>
+                                <input type="datetime-local" id="create-pickup-window-end" name="pickup_window_end" required min="<?php echo htmlspecialchars($pickupMinStartInput); ?>">
                             </div>
                         </div>
                     </div>
@@ -1430,10 +1665,16 @@ if (!empty($user['avatar'])) {
                     itemsContainer.appendChild(label);
                 }
                 if (form) {
-                    var addr = form.querySelector('#create-pickup-address');
+                    var addrStreet = form.querySelector('#create-pickup-address-street');
+                    var addrCity = form.querySelector('#create-pickup-address-city');
+                    var addrProvince = form.querySelector('#create-pickup-address-province');
+                    var addrPostal = form.querySelector('#create-pickup-address-postal');
                     var start = form.querySelector('#create-pickup-window-start');
                     var end = form.querySelector('#create-pickup-window-end');
-                    if (addr) addr.value = '';
+                    if (addrStreet) addrStreet.value = '';
+                    if (addrCity) addrCity.value = '';
+                    if (addrProvince) addrProvince.value = '';
+                    if (addrPostal) addrPostal.value = '';
                     if (start) start.value = '';
                     if (end) end.value = '';
                 }
@@ -1474,23 +1715,30 @@ if (!empty($user['avatar'])) {
         var editItemId = document.getElementById('edit-item-id');
         var deleteItemId = document.getElementById('delete-item-id');
         var currentItem = null;
+        var itemCanEdit = false;
 
         function openModal(item) {
             currentItem = item;
+            itemCanEdit = (item.status === 'draft');
             overlay.classList.add('is-open');
             overlay.setAttribute('aria-hidden', 'false');
             document.getElementById('item-modal-title').textContent = item.title;
             showPanel('view');
             renderView(item);
-            btnDelete.classList.toggle('is-visible', item.status === 'draft');
-            btnRequestPickup.classList.toggle('is-visible', item.status === 'draft');
+            btnEdit.classList.toggle('is-visible', itemCanEdit);
+            btnDelete.classList.toggle('is-visible', itemCanEdit);
+            btnRequestPickup.classList.toggle('is-visible', itemCanEdit);
         }
         function closeModal() {
             overlay.classList.remove('is-open');
             overlay.setAttribute('aria-hidden', 'true');
             currentItem = null;
+            itemCanEdit = false;
         }
         function showPanel(name) {
+            if ((name === 'edit' || name === 'delete') && !itemCanEdit) {
+                name = 'view';
+            }
             panelView.classList.toggle('is-active', name === 'view');
             panelEdit.classList.toggle('is-active', name === 'edit');
             panelDelete.classList.toggle('is-active', name === 'delete');
@@ -1585,29 +1833,61 @@ if (!empty($user['avatar'])) {
         var editId = document.getElementById('pickup-edit-id');
         var cancelId = document.getElementById('pickup-cancel-id');
         var currentPickup = null;
+        var currentCanEdit = false;
+
+        function ensureModalCsrf() {
+            var tokenEl = document.querySelector('input[name="csrf_token"]');
+            if (!tokenEl || !tokenEl.value) return;
+            var forms = [
+                document.getElementById('pickup-edit-form'),
+                document.getElementById('pickup-cancel-form'),
+                document.getElementById('create-pickup-form')
+            ];
+            for (var i = 0; i < forms.length; i++) {
+                var form = forms[i];
+                if (!form) continue;
+                var fToken = form.querySelector('input[name="csrf_token"]');
+                if (!fToken) {
+                    fToken = document.createElement('input');
+                    fToken.type = 'hidden';
+                    fToken.name = 'csrf_token';
+                    form.insertBefore(fToken, form.firstChild);
+                }
+                fToken.value = tokenEl.value;
+            }
+        }
 
         function openPickupModal(pickup) {
             currentPickup = pickup;
+            currentCanEdit = !!pickup.can_edit;
             overlay.classList.add('is-open');
             overlay.setAttribute('aria-hidden', 'false');
             document.getElementById('pickup-modal-title').textContent = 'Pickup #' + pickup.id;
             showPanel('view');
             renderPickupView(pickup);
-            btnEdit.classList.toggle('is-visible', pickup.can_edit);
-            btnCancel.classList.toggle('is-visible', pickup.can_edit);
+            btnEdit.classList.toggle('is-visible', currentCanEdit);
+            btnCancel.classList.toggle('is-visible', currentCanEdit);
         }
         function closePickupModal() {
             overlay.classList.remove('is-open');
             overlay.setAttribute('aria-hidden', 'true');
             currentPickup = null;
+            currentCanEdit = false;
         }
         function showPanel(name) {
+            if ((name === 'edit' || name === 'cancel') && !currentCanEdit) {
+                name = 'view';
+            }
             panelView.classList.toggle('is-active', name === 'view');
             panelEdit.classList.toggle('is-active', name === 'edit');
             panelCancel.classList.toggle('is-active', name === 'cancel');
             if (name === 'edit' && currentPickup) {
                 editId.value = currentPickup.id;
-                document.getElementById('pickup-edit-address').value = currentPickup.address_text;
+                var parts = String(currentPickup.address_text || '').split(',').map(function(p){ return p.trim(); });
+                document.getElementById('pickup-edit-address-street').value = parts[0] || '';
+                document.getElementById('pickup-edit-address-city').value = parts[1] || '';
+                document.getElementById('pickup-edit-address-province').value = parts[2] || '';
+                document.getElementById('pickup-edit-address-postal').value = parts.slice(3).join(', ');
                 document.getElementById('pickup-edit-window-start').value = currentPickup.pickup_window_start;
                 document.getElementById('pickup-edit-window-end').value = currentPickup.pickup_window_end;
                 var container = document.getElementById('pickup-edit-items-container');
@@ -1644,10 +1924,21 @@ if (!empty($user['avatar'])) {
             html += '<div class="pickup-modal__view-detail"><div class="pickup-modal__view-label">Window start</div><div class="pickup-modal__view-value">' + esc(formatDateTime(pickup.pickup_window_start)) + '</div></div>';
             html += '<div class="pickup-modal__view-detail"><div class="pickup-modal__view-label">Window end</div><div class="pickup-modal__view-value">' + esc(formatDateTime(pickup.pickup_window_end)) + '</div></div>';
             html += '<div class="pickup-modal__view-detail"><div class="pickup-modal__view-label">Items (' + pickup.item_count + ')</div><div class="pickup-modal__view-value">';
-            if (pickup.item_titles && pickup.item_titles.length) {
+            if (pickup.item_details && pickup.item_details.length) {
                 html += '<ul class="pickup-modal__view-items">';
-                for (var i = 0; i < pickup.item_titles.length; i++) {
-                    html += '<li>' + esc(pickup.item_titles[i]) + '</li>';
+                for (var i = 0; i < pickup.item_details.length; i++) {
+                    var d = pickup.item_details[i] || {};
+                    html += '<li><strong>' + esc(d.title || ('Item #' + (d.id || ''))) + '</strong>';
+                    if (d.status) {
+                        html += ' <span style="color:#5F6C7B">(' + esc(String(d.status).replaceAll('_', ' ')) + ')</span>';
+                    }
+                    if (d.inspection_result) {
+                        html += '<div style="font-size:12px;color:#425466;margin-top:2px;">Inspection: ' + esc(String(d.inspection_result).replaceAll('_', ' ')) + '</div>';
+                    }
+                    if (d.inspection_notes) {
+                        html += '<div style="font-size:12px;color:#425466;margin-top:2px;">Notes: ' + esc(d.inspection_notes) + '</div>';
+                    }
+                    html += '</li>';
                 }
                 html += '</ul>';
             } else {
@@ -1690,6 +1981,7 @@ if (!empty($user['avatar'])) {
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape' && overlay.classList.contains('is-open')) closePickupModal();
         });
+        ensureModalCsrf();
     })();
     </script>
 </body>
