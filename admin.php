@@ -17,6 +17,7 @@ if (($_SESSION['user']['role'] ?? '') !== 'admin') {
 require_once __DIR__ . '/app/config/db.php';
 require_once __DIR__ . '/app/config/csrf.php';
 require_once __DIR__ . '/app/config/audit.php';
+require_once __DIR__ . '/app/config/item_workflow.php';
 
 function pickup_status_label($status) {
     $labels = [
@@ -148,12 +149,169 @@ if ($section === 'pickups' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_P
     }
 }
 
+// ---------- Inventory: assign item to technician ----------
+if ($section === 'inventory' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_technician'])) {
+    require_valid_csrf();
+    $itemId = (int) ($_POST['item_id'] ?? 0);
+    $technicianId = (int) ($_POST['technician_user_id'] ?? 0);
+    if ($itemId <= 0 || $technicianId <= 0) {
+        header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Invalid item or technician.'));
+        exit;
+    }
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE id = ? AND role = 'technician'");
+    $stmt->execute([$technicianId]);
+    if (!$stmt->fetch()) {
+        header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Invalid technician.'));
+        exit;
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT id, status FROM items WHERE id = ?");
+        $stmt->execute([$itemId]);
+        $item = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$item) {
+            header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Item not found.'));
+            exit;
+        }
+        if (($item['status'] ?? '') !== 'picked_up') {
+            header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Only picked-up items can be assigned to a technician.'));
+            exit;
+        }
+        $stmt = $pdo->prepare("UPDATE items SET technician_user_id = ?, status = 'assigned_to_technician' WHERE id = ?");
+        $stmt->execute([$technicianId, $itemId]);
+        log_audit($pdo, $userId, 'item', $itemId, 'assign_technician', ['technician_user_id' => $technicianId]);
+        header('Location: admin.php?section=inventory&inventory_msg=' . urlencode('Technician assigned.'));
+        exit;
+    } catch (PDOException $e) {
+        header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Could not assign technician.'));
+        exit;
+    }
+}
+
+// ---------- Inventory: admin status override ----------
+if ($section === 'inventory' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['override_item_status'])) {
+    require_valid_csrf();
+    $itemId = (int) ($_POST['item_id'] ?? 0);
+    $newStatus = trim($_POST['new_status'] ?? '');
+    if ($itemId <= 0 || $newStatus === '') {
+        header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Invalid status override.'));
+        exit;
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT id, status FROM items WHERE id = ?");
+        $stmt->execute([$itemId]);
+        $item = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$item) {
+            header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Item not found.'));
+            exit;
+        }
+        if (!admin_can_override_to($item['status'] ?? '', $newStatus)) {
+            header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Status override not allowed.'));
+            exit;
+        }
+        $stmt = $pdo->prepare("UPDATE items SET status = ? WHERE id = ?");
+        $stmt->execute([$newStatus, $itemId]);
+        log_audit($pdo, $userId, 'item', $itemId, 'admin_status_override', ['from' => $item['status'], 'to' => $newStatus]);
+        header('Location: admin.php?section=inventory&inventory_msg=' . urlencode('Item status updated.'));
+        exit;
+    } catch (PDOException $e) {
+        header('Location: admin.php?section=inventory&inventory_error=' . urlencode('Could not update status.'));
+        exit;
+    }
+}
+
+// ---------- Marketplace: approve technician decision ----------
+if ($section === 'marketplace' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['approve_technician_item'])) {
+    require_valid_csrf();
+    $itemId = (int) ($_POST['item_id'] ?? 0);
+    $adminAction = trim($_POST['admin_action'] ?? '');
+    if ($itemId <= 0 || !in_array($adminAction, ['approve_repair', 'approve_sale', 'approve_recycle', 'reject'], true)) {
+        header('Location: admin.php?section=marketplace&marketplace_error=' . urlencode('Invalid approval request.'));
+        exit;
+    }
+    try {
+        $pdo->beginTransaction();
+        $stmt = $pdo->prepare("SELECT id, status FROM items WHERE id = ? FOR UPDATE");
+        $stmt->execute([$itemId]);
+        $item = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$item || ($item['status'] ?? '') !== 'waiting_for_admin_approval') {
+            $pdo->rollBack();
+            header('Location: admin.php?section=marketplace&marketplace_error=' . urlencode('Item is not waiting for approval.'));
+            exit;
+        }
+        $stmt = $pdo->prepare("SELECT result FROM inspections WHERE item_id = ? ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$itemId]);
+        $inspection = $stmt->fetch(PDO::FETCH_ASSOC);
+        $result = (string) ($inspection['result'] ?? '');
+        $newStatus = admin_approval_target_status($result, $adminAction);
+        if ($newStatus === null) {
+            $pdo->rollBack();
+            header('Location: admin.php?section=marketplace&marketplace_error=' . urlencode('This approval does not match the technician inspection result.'));
+            exit;
+        }
+        $stmt = $pdo->prepare("UPDATE items SET status = ? WHERE id = ?");
+        $stmt->execute([$newStatus, $itemId]);
+        if ($adminAction === 'approve_recycle') {
+            $pdo->prepare("UPDATE salvaged_parts SET status = 'approved' WHERE item_id = ? AND status = 'pending_review'")->execute([$itemId]);
+        }
+        log_audit($pdo, $userId, 'item', $itemId, 'admin_approve_inspection', ['action' => $adminAction, 'inspection_result' => $result, 'new_status' => $newStatus]);
+        $pdo->commit();
+        header('Location: admin.php?section=marketplace&marketplace_msg=' . urlencode('Technician decision processed.'));
+        exit;
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        header('Location: admin.php?section=marketplace&marketplace_error=' . urlencode('Could not process approval.'));
+        exit;
+    }
+}
+
+// ---------- Marketplace: mark ready item as approved for listing ----------
+if ($section === 'marketplace' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['approve_for_listing'])) {
+    require_valid_csrf();
+    $itemId = (int) ($_POST['item_id'] ?? 0);
+    try {
+        $stmt = $pdo->prepare("SELECT id, status FROM items WHERE id = ?");
+        $stmt->execute([$itemId]);
+        $item = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$item || ($item['status'] ?? '') !== 'ready_for_marketplace') {
+            header('Location: admin.php?section=marketplace&marketplace_error=' . urlencode('Only items ready for marketplace can be approved.'));
+            exit;
+        }
+        $stmt = $pdo->prepare("UPDATE items SET status = 'approved_for_sale' WHERE id = ?");
+        $stmt->execute([$itemId]);
+        log_audit($pdo, $userId, 'item', $itemId, 'approve_for_listing', []);
+        header('Location: admin.php?section=marketplace&marketplace_msg=' . urlencode('Item approved for marketplace listing.'));
+        exit;
+    } catch (PDOException $e) {
+        header('Location: admin.php?section=marketplace&marketplace_error=' . urlencode('Could not approve item.'));
+        exit;
+    }
+}
+
+$inventoryMsg = '';
+$inventoryError = '';
+if ($section === 'inventory' && isset($_GET['inventory_msg'])) {
+    $inventoryMsg = (string) $_GET['inventory_msg'];
+}
+if ($section === 'inventory' && isset($_GET['inventory_error'])) {
+    $inventoryError = (string) $_GET['inventory_error'];
+}
+
 $drivers = [];
 try {
     $stmt = $pdo->query("SELECT id, name, email FROM users WHERE role = 'driver' ORDER BY name ASC, id ASC");
     $drivers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     // drivers might not exist yet
+}
+
+$technicians = [];
+try {
+    $stmt = $pdo->query("SELECT id, name, email FROM users WHERE role = 'technician' ORDER BY name ASC, id ASC");
+    $technicians = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    // optional
 }
 
 $pickups = [];
@@ -272,18 +430,21 @@ try {
                 i.title,
                 i.category,
                 i.status,
+                i.technician_user_id,
                 i.created_at,
                 u.name AS recycler_name,
                 u.email AS recycler_email,
+                tu.name AS technician_name,
                 p.id AS pickup_id,
                 p.pickup_window_start,
                 p.pickup_window_end,
                 p.status AS pickup_status
             FROM items i
             JOIN users u ON u.id = i.recycler_user_id
+            LEFT JOIN users tu ON tu.id = i.technician_user_id
             LEFT JOIN pickup_items pi ON pi.item_id = i.id
             LEFT JOIN pickups p ON p.id = pi.pickup_id
-            WHERE i.status IN ('picked_up', 'inspected', 'repair_in_progress', 'approved_for_sale', 'listed_for_sale', 'sold', 'recycled')
+            WHERE i.status NOT IN ('draft', 'pickup_requested')
             ORDER BY i.updated_at DESC, i.id DESC";
     $stmt = $pdo->query($sql);
     $inventoryItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -309,8 +470,8 @@ if ($section === 'marketplace' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset
             if (!$item) {
                 $marketplaceError = 'Item not found.';
                 $pdo->rollBack();
-            } elseif (($item['status'] ?? '') !== 'approved_for_sale') {
-                $marketplaceError = 'Only items approved for sale can be listed.';
+            } elseif (!in_array($item['status'] ?? '', marketplace_listable_statuses(), true)) {
+                $marketplaceError = 'Only items approved for sale or ready for marketplace can be listed.';
                 $pdo->rollBack();
             } else {
                 $stmt = $pdo->prepare("SELECT id FROM marketplace_listings WHERE item_id = ? LIMIT 1");
@@ -384,14 +545,46 @@ if ($section === 'marketplace' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset
 
 $marketplaceQueue = [];
 try {
-    $stmt = $pdo->query("SELECT i.id, i.title, i.category, i.description, i.created_at, u.name AS recycler_name
+    $stmt = $pdo->query("SELECT i.id, i.title, i.category, i.description, i.status, i.created_at, u.name AS recycler_name
         FROM items i
         JOIN users u ON u.id = i.recycler_user_id
-        WHERE i.status = 'approved_for_sale'
+        WHERE i.status IN ('approved_for_sale', 'ready_for_marketplace')
         ORDER BY i.updated_at DESC, i.id DESC");
     $marketplaceQueue = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     // items/users table may not exist
+}
+
+$pendingApprovals = [];
+try {
+    $stmt = $pdo->query(
+        "SELECT i.id, i.title, i.status, i.technician_user_id, u.name AS recycler_name,
+            tu.name AS technician_name,
+            (SELECT result FROM inspections WHERE item_id = i.id ORDER BY id DESC LIMIT 1) AS inspection_result,
+            (SELECT notes FROM inspections WHERE item_id = i.id ORDER BY id DESC LIMIT 1) AS inspection_notes
+         FROM items i
+         JOIN users u ON u.id = i.recycler_user_id
+         LEFT JOIN users tu ON tu.id = i.technician_user_id
+         WHERE i.status = 'waiting_for_admin_approval'
+         ORDER BY i.updated_at DESC, i.id DESC"
+    );
+    $pendingApprovals = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    // optional
+}
+
+$readyForListing = [];
+try {
+    $stmt = $pdo->query(
+        "SELECT i.id, i.title, u.name AS recycler_name
+         FROM items i
+         JOIN users u ON u.id = i.recycler_user_id
+         WHERE i.status = 'ready_for_marketplace'
+         ORDER BY i.updated_at DESC"
+    );
+    $readyForListing = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    // optional
 }
 
 $marketplaceListings = [];
@@ -507,11 +700,11 @@ if (!empty($user['avatar'])) {
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <?php require_once __DIR__ . '/app/includes/app_bg.php'; ?>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-            background: #EEF1F5;
             color: #1F2933;
             line-height: 1.5;
             min-height: 100vh;
@@ -762,7 +955,7 @@ if (!empty($user['avatar'])) {
         }
     </style>
 </head>
-<body>
+<body class="app-bg-page">
     <header class="header">
         <div class="header-inner">
             <a href="admin.php" class="header-logo">
@@ -779,6 +972,7 @@ if (!empty($user['avatar'])) {
                     <?php endif; ?>
                     <span class="user-name"><?php echo htmlspecialchars($user['name']); ?></span>
                 </div>
+                <?php require __DIR__ . '/app/includes/nav_marketplace.php'; ?>
                 <a href="dashboard.php" class="btn">User site</a>
                 <a href="login.php?logout=1" class="btn">Log out</a>
             </nav>
@@ -1064,14 +1258,80 @@ if (!empty($user['avatar'])) {
 
             <?php elseif ($section === 'marketplace'): ?>
                 <h1>Marketplace</h1>
-                <p class="page-desc">Approve items for listing when the technician gives the green light. Control what goes on sale.</p>
+                <p class="page-desc">Review technician decisions, approve repairs, and publish marketplace listings.</p>
+
+                <div class="card">
+                    <h2>Pending technician decisions</h2>
+                    <?php if (count($pendingApprovals) === 0): ?>
+                        <p class="placeholder-desc">No items waiting for admin approval.</p>
+                    <?php else: ?>
+                        <div class="table-wrap">
+                            <table class="data-table">
+                                <thead><tr><th>Item</th><th>Technician</th><th>Result</th><th>Notes</th><th>Action</th></tr></thead>
+                                <tbody>
+                                    <?php foreach ($pendingApprovals as $pa): ?>
+                                        <tr>
+                                            <td><strong><?php echo htmlspecialchars($pa['title']); ?></strong><br><span class="small-note"><?php echo htmlspecialchars($pa['recycler_name']); ?></span></td>
+                                            <td><?php echo htmlspecialchars($pa['technician_name'] ?: '—'); ?></td>
+                                            <td><?php echo htmlspecialchars(ucwords(str_replace('_', ' ', (string) $pa['inspection_result']))); ?></td>
+                                            <td><span class="small-note"><?php echo htmlspecialchars(mb_strimwidth((string) ($pa['inspection_notes'] ?? ''), 0, 80, '…')); ?></span></td>
+                                            <td>
+                                                <form method="post" action="admin.php?section=marketplace" style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;">
+                                                    <?php echo csrf_field(); ?>
+                                                    <input type="hidden" name="approve_technician_item" value="1">
+                                                    <input type="hidden" name="item_id" value="<?php echo (int) $pa['id']; ?>">
+                                                    <select name="admin_action" required style="min-width:150px;">
+                                                        <option value="">Choose action</option>
+                                                        <?php if (($pa['inspection_result'] ?? '') === 'repairable'): ?><option value="approve_repair">Approve repair</option><?php endif; ?>
+                                                        <?php if (($pa['inspection_result'] ?? '') === 'working'): ?><option value="approve_sale">Approve for resale</option><?php endif; ?>
+                                                        <?php if (in_array($pa['inspection_result'] ?? '', ['recyclable', 'not_repairable'], true)): ?><option value="approve_recycle">Confirm recycle / scrap</option><?php endif; ?>
+                                                        <option value="reject">Send back to technician</option>
+                                                    </select>
+                                                    <button type="submit" class="btn-secondary">Apply</button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <?php if (count($readyForListing) > 0): ?>
+                <div class="card">
+                    <h2>Ready for marketplace (from technician)</h2>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead><tr><th>Item</th><th>Recycler</th><th>Action</th></tr></thead>
+                            <tbody>
+                                <?php foreach ($readyForListing as $rf): ?>
+                                    <tr>
+                                        <td><?php echo htmlspecialchars($rf['title']); ?></td>
+                                        <td><?php echo htmlspecialchars($rf['recycler_name']); ?></td>
+                                        <td>
+                                            <form method="post" action="admin.php?section=marketplace" style="display:inline;">
+                                                <?php echo csrf_field(); ?>
+                                                <input type="hidden" name="approve_for_listing" value="1">
+                                                <input type="hidden" name="item_id" value="<?php echo (int) $rf['id']; ?>">
+                                                <button type="submit" class="btn-secondary">Approve for listing</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <div class="card">
                     <h2>Create listing from approved item</h2>
                     <?php if ($marketplaceMsg): ?><p class="msg success"><?php echo htmlspecialchars($marketplaceMsg); ?></p><?php endif; ?>
                     <?php if ($marketplaceError): ?><p class="msg error"><?php echo htmlspecialchars($marketplaceError); ?></p><?php endif; ?>
 
                     <?php if (count($marketplaceQueue) === 0): ?>
-                        <p class="placeholder-desc">No items are currently approved for sale.</p>
+                        <p class="placeholder-desc">No items are ready to list on the marketplace.</p>
                     <?php else: ?>
                         <form method="post" action="admin.php?section=marketplace">
                             <?php echo csrf_field(); ?>
@@ -1082,7 +1342,7 @@ if (!empty($user['avatar'])) {
                                     <option value="">Select item</option>
                                     <?php foreach ($marketplaceQueue as $qi): ?>
                                         <option value="<?php echo (int) $qi['id']; ?>">
-                                            #<?php echo (int) $qi['id']; ?> — <?php echo htmlspecialchars($qi['title']); ?> (<?php echo htmlspecialchars($qi['recycler_name']); ?>)
+                                            #<?php echo (int) $qi['id']; ?> — <?php echo htmlspecialchars($qi['title']); ?> [<?php echo htmlspecialchars(item_status_label((string)($qi['status'] ?? 'approved_for_sale'))); ?>]
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
@@ -1201,10 +1461,11 @@ if (!empty($user['avatar'])) {
 
             <?php elseif ($section === 'inventory'): ?>
                 <h1>Inventory</h1>
-                <p class="page-desc">What comes in from pickups: received items at the facility.</p>
+                <p class="page-desc">Assign technicians to picked-up items and manage facility inventory.</p>
+                <?php if ($inventoryMsg): ?><p class="msg success"><?php echo htmlspecialchars($inventoryMsg); ?></p><?php endif; ?>
+                <?php if ($inventoryError): ?><p class="msg error"><?php echo htmlspecialchars($inventoryError); ?></p><?php endif; ?>
                 <div class="card">
                     <h2>Received items</h2>
-                    <p class="small-note" style="margin-bottom: 0.75rem;">Includes items with status: picked up, inspected, repair in progress, approved for sale, listed for sale, sold, or recycled.</p>
                     <?php if (count($inventoryItems) === 0): ?>
                         <p class="placeholder-desc">No received inventory yet.</p>
                     <?php else: ?>
@@ -1216,8 +1477,9 @@ if (!empty($user['avatar'])) {
                                         <th>Recycler</th>
                                         <th>Pickup</th>
                                         <th>Item status</th>
+                                        <th>Technician</th>
                                         <th>Pickup status</th>
-                                        <th>Created</th>
+                                        <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1234,12 +1496,13 @@ if (!empty($user['avatar'])) {
                                             <td>
                                                 <?php if (!empty($ii['pickup_id'])): ?>
                                                     #<?php echo (int) $ii['pickup_id']; ?><br>
-                                                    <span class="small-note"><?php echo date('M j, Y g:i A', strtotime($ii['pickup_window_start'])); ?> to <?php echo date('M j, Y g:i A', strtotime($ii['pickup_window_end'])); ?></span>
+                                                    <span class="small-note"><?php echo date('M j, Y g:i A', strtotime($ii['pickup_window_start'])); ?></span>
                                                 <?php else: ?>
-                                                    <span class="small-note">No pickup record</span>
+                                                    <span class="small-note">No pickup</span>
                                                 <?php endif; ?>
                                             </td>
-                                            <td><span class="status-badge status-<?php echo htmlspecialchars((string) $ii['status']); ?>"><?php echo htmlspecialchars(ucwords(str_replace('_', ' ', (string) $ii['status']))); ?></span></td>
+                                            <td><span class="status-badge status-<?php echo htmlspecialchars((string) $ii['status']); ?>"><?php echo htmlspecialchars(item_status_label((string) $ii['status'])); ?></span></td>
+                                            <td><?php echo htmlspecialchars($ii['technician_name'] ?: '—'); ?></td>
                                             <td>
                                                 <?php if (!empty($ii['pickup_status'])): ?>
                                                     <span class="status-badge status-<?php echo htmlspecialchars((string) $ii['pickup_status']); ?>"><?php echo htmlspecialchars(pickup_status_label($ii['pickup_status'])); ?></span>
@@ -1247,12 +1510,33 @@ if (!empty($user['avatar'])) {
                                                     <span class="small-note">-</span>
                                                 <?php endif; ?>
                                             </td>
-                                            <td>
-                                                <?php if (!empty($ii['created_at'])): ?>
-                                                    <?php echo date('M j, Y g:i A', strtotime($ii['created_at'])); ?>
-                                                <?php else: ?>
-                                                    <span class="small-note">-</span>
+                                            <td class="actions-cell">
+                                                <?php if (($ii['status'] ?? '') === 'picked_up' && count($technicians) > 0): ?>
+                                                    <form method="post" action="admin.php?section=inventory" style="margin-bottom:.35rem;">
+                                                        <?php echo csrf_field(); ?>
+                                                        <input type="hidden" name="assign_technician" value="1">
+                                                        <input type="hidden" name="item_id" value="<?php echo (int) $ii['id']; ?>">
+                                                        <select name="technician_user_id" required style="min-width:120px;font-size:12px;">
+                                                            <option value="">Assign tech</option>
+                                                            <?php foreach ($technicians as $t): ?>
+                                                                <option value="<?php echo (int) $t['id']; ?>"><?php echo htmlspecialchars($t['name']); ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                        <button type="submit" class="btn-secondary" style="font-size:12px;">Assign</button>
+                                                    </form>
                                                 <?php endif; ?>
+                                                <form method="post" action="admin.php?section=inventory">
+                                                    <?php echo csrf_field(); ?>
+                                                    <input type="hidden" name="override_item_status" value="1">
+                                                    <input type="hidden" name="item_id" value="<?php echo (int) $ii['id']; ?>">
+                                                    <select name="new_status" required style="min-width:130px;font-size:12px;">
+                                                        <option value="">Override status</option>
+                                                        <?php foreach (item_workflow_labels() as $code => $label): ?>
+                                                            <option value="<?php echo htmlspecialchars($code); ?>" <?php echo ($ii['status'] ?? '') === $code ? 'selected' : ''; ?>><?php echo htmlspecialchars($label); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                    <button type="submit" class="btn-secondary" style="font-size:12px;">Update</button>
+                                                </form>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>

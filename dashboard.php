@@ -11,23 +11,7 @@ if (empty($_SESSION['user'])) {
 
 require_once __DIR__ . '/app/config/db.php';
 require_once __DIR__ . '/app/config/csrf.php';
-
-/** Human-readable labels for item statuses */
-function item_status_label($status) {
-    $labels = [
-        'draft' => 'Draft',
-        'pickup_requested' => 'Pickup requested',
-        'scheduled' => 'Scheduled',
-        'picked_up' => 'Picked up',
-        'inspected' => 'Inspected',
-        'recycled' => 'Recycled',
-        'repair_in_progress' => 'Repair in progress',
-        'approved_for_sale' => 'Approved for sale',
-        'listed_for_sale' => 'Listed for sale',
-        'sold' => 'Sold',
-    ];
-    return $labels[$status] ?? ucfirst(str_replace('_', ' ', (string) $status));
-}
+require_once __DIR__ . '/app/config/item_workflow.php';
 
 /** Human-readable labels for pickup statuses */
 function pickup_status_label($status) {
@@ -565,11 +549,11 @@ if (!empty($user['avatar'])) {
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <?php require_once __DIR__ . '/app/includes/app_bg.php'; ?>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-            background: #EEF1F5;
             color: #1F2933;
             line-height: 1.5;
             min-height: 100vh;
@@ -1110,7 +1094,7 @@ if (!empty($user['avatar'])) {
         }
     </style>
 </head>
-<body>
+<body class="app-bg-page">
     <header class="header">
         <div class="header-inner">
             <a href="dashboard.php" class="header-logo">
@@ -1126,6 +1110,7 @@ if (!empty($user['avatar'])) {
                     <?php endif; ?>
                     <span class="user-name"><?php echo htmlspecialchars($user['name']); ?></span>
                 </div>
+                <?php require __DIR__ . '/app/includes/nav_marketplace.php'; ?>
                 <a href="login.php?logout=1" class="btn">Log out</a>
             </nav>
         </div>

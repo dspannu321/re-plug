@@ -1,0 +1,462 @@
+/* Authenticated app pages — user_bg + glass UI (all roles) */
+
+.app-bg-page {
+    --glass-bg: rgba(255, 255, 255, 0.14);
+    --glass-border: rgba(255, 255, 255, 0.28);
+    --glass-blur: blur(22px) saturate(1.15);
+    --glass-shadow:
+        0 12px 40px -10px rgba(0, 0, 0, 0.25),
+        0 0 0 1px rgba(255, 255, 255, 0.1) inset,
+        0 28px 56px -20px rgba(0, 0, 0, 0.2);
+    --glass-radius: 16px;
+
+    position: relative;
+    min-height: 100vh;
+    background: #0f172a url('../../../bg_images/user_bg.png') center center / cover no-repeat fixed;
+}
+
+.app-bg-page::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: linear-gradient(
+        165deg,
+        rgba(15, 23, 42, 0.62) 0%,
+        rgba(30, 58, 95, 0.48) 48%,
+        rgba(15, 23, 42, 0.6) 100%
+    );
+    pointer-events: none;
+}
+
+.app-bg-page > * {
+    position: relative;
+    z-index: 1;
+}
+
+/* —— Glass surfaces: header, sidebar, cards, forms, grids, modals —— */
+.app-bg-page .header,
+.app-bg-page .sidebar nav,
+.app-bg-page .card,
+.app-bg-page .table-wrap,
+.app-bg-page .empty,
+.app-bg-page .empty-listings,
+.app-bg-page .listing-card,
+.app-bg-page .pickup-card,
+.app-bg-page .inspection-card,
+.app-bg-page .queue-card,
+.app-bg-page .form-card,
+.app-bg-page .pickup-detail-item,
+.app-bg-page .item-modal,
+.app-bg-page .pickup-modal,
+.app-bg-page .create-pickup-modal {
+    background: var(--glass-bg) !important;
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border) !important;
+    box-shadow: var(--glass-shadow);
+}
+
+.app-bg-page .header {
+    border-radius: 0 0 18px 18px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.app-bg-page .sidebar nav,
+.app-bg-page .card,
+.app-bg-page .table-wrap,
+.app-bg-page .empty-listings,
+.app-bg-page .listing-card,
+.app-bg-page .pickup-card,
+.app-bg-page .item-modal,
+.app-bg-page .pickup-modal,
+.app-bg-page .create-pickup-modal,
+.app-bg-page .pickup-detail-item {
+    border-radius: var(--glass-radius) !important;
+}
+
+/* —— Page typography (bold + high contrast on glass) —— */
+.app-bg-page {
+    -webkit-font-smoothing: antialiased;
+}
+
+.app-bg-page .content,
+.app-bg-page .wrap,
+.app-bg-page .main {
+    color: #fff;
+}
+
+.app-bg-page .content h1,
+.app-bg-page .wrap h1,
+.app-bg-page .main > h1,
+.app-bg-page h1 {
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.65), 0 0 2px rgba(0, 0, 0, 0.8);
+}
+
+.app-bg-page .content .page-desc,
+.app-bg-page .desc {
+    color: #fff !important;
+    font-weight: 600 !important;
+    font-size: 15px !important;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6), 0 0 1px rgba(0, 0, 0, 0.9);
+}
+
+.app-bg-page .small,
+.app-bg-page .placeholder-desc,
+.app-bg-page .hint,
+.app-bg-page .small-note,
+.app-bg-page .pickup-detail-no-photo {
+    color: #fff !important;
+    font-weight: 600 !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.55), 0 0 1px rgba(0, 0, 0, 0.85);
+}
+
+.app-bg-page .card h2,
+.app-bg-page .card h3,
+.app-bg-page .pickup-detail-item h3,
+.app-bg-page .item-modal__title,
+.app-bg-page .pickup-modal__title,
+.app-bg-page .create-pickup-modal__title,
+.app-bg-page .pickup-modal__form-section-title,
+.app-bg-page .create-pickup-modal__form-section-title {
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6), 0 0 2px rgba(0, 0, 0, 0.85);
+}
+
+.app-bg-page .form-group label {
+    color: #fff !important;
+    font-weight: 700 !important;
+    font-size: 14px !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.6), 0 0 1px rgba(0, 0, 0, 0.9);
+}
+
+.app-bg-page .card p,
+.app-bg-page .card td,
+.app-bg-page .card th,
+.app-bg-page .card li,
+.app-bg-page .card dl,
+.app-bg-page .card dd,
+.app-bg-page .pickup-detail-meta,
+.app-bg-page .pickup-detail-meta dd,
+.app-bg-page .listing-card .title,
+.app-bg-page .pickup-card .pickup-address,
+.app-bg-page .item-desc,
+.app-bg-page .item-checkbox label,
+.app-bg-page .pickup-modal__view-value,
+.app-bg-page .item-modal__view-value {
+    color: #fff !important;
+    font-weight: 600 !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.55), 0 0 1px rgba(0, 0, 0, 0.85);
+}
+
+.app-bg-page .listing-card .meta,
+.app-bg-page .pickup-card .pickup-meta,
+.app-bg-page .pickup-detail-meta dt,
+.app-bg-page .pickup-modal__view-label,
+.app-bg-page .item-modal__view-label,
+.app-bg-page .pickup-action-label {
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+}
+
+.app-bg-page .pickup-detail-back {
+    color: #bbdefb !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* —— Form fields — glass inputs (match translucent cards) —— */
+.app-bg-page input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.app-bg-page textarea,
+.app-bg-page select {
+    background: rgba(255, 255, 255, 0.14) !important;
+    backdrop-filter: blur(16px) saturate(1.1);
+    -webkit-backdrop-filter: blur(16px) saturate(1.1);
+    border: 1px solid rgba(255, 255, 255, 0.32) !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+    border-radius: 10px;
+    box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.12),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.app-bg-page input::placeholder,
+.app-bg-page textarea::placeholder {
+    color: rgba(255, 255, 255, 0.72) !important;
+    font-weight: 500;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.app-bg-page input:focus,
+.app-bg-page textarea:focus,
+.app-bg-page select:focus {
+    outline: none;
+    background: rgba(255, 255, 255, 0.22) !important;
+    border-color: rgba(255, 255, 255, 0.5) !important;
+    box-shadow:
+        0 0 0 3px rgba(30, 136, 229, 0.35),
+        0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.app-bg-page input[type="file"] {
+    background: rgba(255, 255, 255, 0.14) !important;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    color: #fff !important;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.32) !important;
+    border-radius: 10px;
+}
+
+.app-bg-page input[type="file"]::file-selector-button {
+    background: rgba(255, 255, 255, 0.2) !important;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    color: #fff !important;
+    font-weight: 700;
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+
+.app-bg-page input[type="file"]::file-selector-button:hover {
+    background: rgba(255, 255, 255, 0.3) !important;
+}
+
+.app-bg-page input[type="datetime-local"] {
+    color-scheme: dark;
+}
+
+.app-bg-page input[type="checkbox"],
+.app-bg-page input[type="radio"] {
+    accent-color: #1e88e5;
+}
+
+/* —— Alerts & notices (match My Pickups red bar) —— */
+.app-bg-page .msg,
+.app-bg-page .pickup-modal__cancel-note,
+.app-bg-page .item-modal__delete-note {
+    border-radius: 10px !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.22) !important;
+}
+
+.app-bg-page .msg {
+    font-weight: 600 !important;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.app-bg-page .msg.success {
+    background: rgba(46, 125, 50, 0.5) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+}
+
+.app-bg-page .msg.error,
+.app-bg-page .card .msg.error {
+    background: rgba(198, 40, 40, 0.55) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+}
+
+.app-bg-page .msg:not(.success):not(.error) {
+    background: rgba(0, 0, 0, 0.35) !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+}
+
+.app-bg-page .pickup-modal__cancel-note,
+.app-bg-page .item-modal__delete-note {
+    background: rgba(198, 40, 40, 0.5) !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+}
+
+.app-bg-page .msg a,
+.app-bg-page .card .msg.error a {
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-decoration: underline;
+}
+
+/* —— Sidebar —— */
+.app-bg-page .sidebar a {
+    border-bottom-color: rgba(255, 255, 255, 0.12) !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.55), 0 0 1px rgba(0, 0, 0, 0.85);
+}
+
+.app-bg-page .sidebar a:hover {
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+}
+
+.app-bg-page .sidebar a.active {
+    background: rgba(255, 255, 255, 0.22) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+/* —— Header —— */
+.app-bg-page .header-logo span,
+.app-bg-page .header-nav .user-name {
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.55), 0 0 1px rgba(0, 0, 0, 0.9);
+}
+
+.app-bg-page .header-nav .btn,
+.app-bg-page .header-nav .btn-secondary,
+.app-bg-page .btn-secondary {
+    background: rgba(255, 255, 255, 0.18) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    border: 1px solid rgba(255, 255, 255, 0.32) !important;
+    backdrop-filter: blur(8px);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.app-bg-page .header-nav .btn:hover,
+.app-bg-page .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.28) !important;
+    color: #fff !important;
+    border-color: rgba(255, 255, 255, 0.45) !important;
+}
+
+/* —— Tables —— */
+.app-bg-page table th {
+    background: rgba(0, 0, 0, 0.25) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.app-bg-page table td {
+    border-bottom-color: rgba(255, 255, 255, 0.12) !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.app-bg-page .data-table td.actions-cell {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-left-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* —— Listing / pickup grid cards —— */
+.app-bg-page .listing-card .thumb-none,
+.app-bg-page .listing-card .thumb {
+    background: rgba(0, 0, 0, 0.2) !important;
+}
+
+.app-bg-page .listing-card .status,
+.app-bg-page .status-badge {
+    text-shadow: none;
+}
+
+.app-bg-page .listing-card .status {
+    background: rgba(0, 0, 0, 0.35) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.app-bg-page .listings-header h2,
+.app-bg-page .content h2 {
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+/* —— Modals —— */
+.app-bg-page .item-modal-overlay,
+.app-bg-page .pickup-modal-overlay,
+.app-bg-page .create-pickup-modal-overlay {
+    background: rgba(15, 23, 42, 0.55) !important;
+    backdrop-filter: blur(4px);
+}
+
+.app-bg-page .item-modal__header,
+.app-bg-page .pickup-modal__header,
+.app-bg-page .create-pickup-modal__header,
+.app-bg-page .item-modal__actions,
+.app-bg-page .pickup-modal__actions,
+.app-bg-page .create-pickup-modal__actions {
+    border-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+.app-bg-page .item-modal__close,
+.app-bg-page .pickup-modal__close,
+.app-bg-page .create-pickup-modal__close {
+    background: rgba(255, 255, 255, 0.15) !important;
+    color: #fff !important;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.app-bg-page .pickup-modal__item-list {
+    background: rgba(255, 255, 255, 0.1) !important;
+    border-color: rgba(255, 255, 255, 0.25) !important;
+    backdrop-filter: blur(10px);
+}
+
+.app-bg-page .pickup-modal__item-row {
+    border-bottom-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+.app-bg-page .item-modal__view-photo,
+.app-bg-page .item-modal__view-photo-empty {
+    background: rgba(0, 0, 0, 0.25) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* —— Buttons —— */
+.app-bg-page .btn-primary,
+.app-bg-page button.btn-primary {
+    background: #1e88e5 !important;
+    border-color: #1e88e5 !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    box-shadow: 0 4px 14px rgba(30, 136, 229, 0.45);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.app-bg-page .btn-danger {
+    background: #e53935 !important;
+    border-color: #e53935 !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.app-bg-page .badge {
+    text-shadow: none;
+}
+
+.app-bg-page .header-logo .badge {
+    background: #1e88e5 !important;
+    color: #fff !important;
+}
+
+/* Avatar placeholders on glass pages */
+.app-bg-page .avatar-placeholder,
+.app-bg-page .user-avatar-placeholder {
+    background: rgba(255, 255, 255, 0.2) !important;
+    color: #fff !important;
+    border-color: rgba(255, 255, 255, 0.35) !important;
+}
+
+.app-bg-page .user-avatar {
+    border-color: rgba(255, 255, 255, 0.4) !important;
+}

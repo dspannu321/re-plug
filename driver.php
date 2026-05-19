@@ -16,6 +16,7 @@ if (($_SESSION['user']['role'] ?? '') !== 'driver') {
 require_once __DIR__ . '/app/config/db.php';
 require_once __DIR__ . '/app/config/audit.php';
 require_once __DIR__ . '/app/config/csrf.php';
+require_once __DIR__ . '/app/config/item_workflow.php';
 
 $driverId = (int) $_SESSION['user']['id'];
 $driverName = $_SESSION['user']['name'] ?? 'Driver';
@@ -122,15 +123,18 @@ function driver_pickup_status_label($status) {
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <?php require_once __DIR__ . '/app/includes/app_bg.php'; ?>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #EEF1F5; color: #1F2933; }
+        body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #1F2933; min-height: 100vh; display: flex; flex-direction: column; }
         .header { background: #fff; border-bottom: 1px solid #E5E7EB; padding: 0 1.5rem; }
         .header-inner { max-width: 1120px; margin: 0 auto; min-height: 64px; display: flex; align-items: center; justify-content: space-between; }
         .logo { display: flex; align-items: center; gap: .7rem; color: inherit; text-decoration: none; font-weight: 700; }
         .logo img { height: 36px; width: auto; }
         .nav { display: flex; align-items: center; gap: .5rem; }
         .btn { display: inline-block; padding: 8px 13px; border-radius: 7px; font-size: 13px; font-weight: 500; border: 1px solid #E5E7EB; text-decoration: none; color: #1F2933; background: #fff; }
+        .btn-marketplace { font-weight: 600; }
+        .address-link { color: #1E88E5; word-break: break-word; }
         .btn:hover { border-color: #1E88E5; color: #1E88E5; }
         .btn-primary { background: #1E88E5; color: #fff; border-color: #1E88E5; }
         .btn-primary:hover { background: #1565C0; border-color: #1565C0; color: #fff; }
@@ -155,11 +159,12 @@ function driver_pickup_status_label($status) {
         .small { color: #5F6C7B; font-size: 12px; }
     </style>
 </head>
-<body>
+<body class="app-bg-page">
     <header class="header">
         <div class="header-inner">
             <a class="logo" href="driver.php"><img src="public/assets/images/logo.png" alt="RePlug">RePlug Driver</a>
             <nav class="nav">
+                <?php require __DIR__ . '/app/includes/nav_marketplace.php'; ?>
                 <span class="small"><?php echo htmlspecialchars($driverName); ?></span>
                 <a href="login.php?logout=1" class="btn">Log out</a>
             </nav>
@@ -193,7 +198,12 @@ function driver_pickup_status_label($status) {
                                 <td>#<?php echo (int) $pu['id']; ?></td>
                                 <td><?php echo htmlspecialchars($pu['recycler_name']); ?><br><span class="small"><?php echo htmlspecialchars($pu['recycler_email']); ?></span></td>
                                 <td><?php echo date('M j, Y g:i A', strtotime($pu['pickup_window_start'])); ?><br><span class="small">to <?php echo date('M j, Y g:i A', strtotime($pu['pickup_window_end'])); ?></span></td>
-                                <td><?php echo htmlspecialchars(mb_strimwidth((string)$pu['address_text'], 0, 70, '...')); ?></td>
+                                <td>
+                                    <?php $mapUrl = replug_maps_search_url((string) $pu['address_text']); ?>
+                                    <a href="<?php echo htmlspecialchars($mapUrl); ?>" target="_blank" rel="noopener noreferrer" style="font-weight:600;">
+                                        <?php echo htmlspecialchars($pu['address_text']); ?>
+                                    </a>
+                                </td>
                                 <td><?php echo (int) $pu['item_count']; ?></td>
                                 <td><span class="badge status-<?php echo htmlspecialchars((string)$pu['status']); ?>"><?php echo htmlspecialchars(driver_pickup_status_label($pu['status'])); ?></span></td>
                                 <td>

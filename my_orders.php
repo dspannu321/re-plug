@@ -33,9 +33,10 @@ try {
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <?php require_once __DIR__ . '/app/includes/app_bg.php'; ?>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #F7F9FB; color: #1F2933; }
+        body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #1F2933; min-height: 100vh; }
         .header { background: #fff; border-bottom: 1px solid #E5E7EB; padding: 0 1.5rem; }
         .header-inner { max-width: 1100px; margin: 0 auto; min-height: 68px; display: flex; justify-content: space-between; align-items: center; }
         .logo { text-decoration: none; color: inherit; font-weight: 700; font-size: 1.2rem; display: inline-flex; align-items: center; gap: .5rem; }
@@ -54,7 +55,7 @@ try {
         .empty { background: #fff; border: 1px solid #E5E7EB; border-radius: 10px; padding: 1rem; color: #5F6C7B; font-size: 14px; }
     </style>
 </head>
-<body>
+<body class="app-bg-page">
     <header class="header">
         <div class="header-inner">
             <a class="logo" href="index.php"><img src="public/assets/images/logo.png" alt="RePlug">RePlug</a>
